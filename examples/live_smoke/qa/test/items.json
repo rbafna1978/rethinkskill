@@ -1,0 +1,8 @@
+[
+  {
+    "id": "qa-smoke-001",
+    "question": "What is the capital of France?",
+    "context": "Paris is the capital and largest city of France.",
+    "answers": ["Paris"]
+  }
+]

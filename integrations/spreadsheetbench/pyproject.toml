@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rethinkskill-spreadsheetbench"
+version = "0.1.0"
+description = "Optional SpreadsheetBench artifact-execution adapter for rethinkskill"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+  "rethinkskill>=1.1,<2",
+  "openpyxl>=3.1,<4",
+]
+
+[project.entry-points."rethinkskill.harnesses"]
+spreadsheetbench = "rethinkskill_spreadsheetbench.plugin:spec"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

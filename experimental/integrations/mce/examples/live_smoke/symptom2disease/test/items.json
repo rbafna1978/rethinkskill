@@ -1,0 +1,8 @@
+[
+  {
+    "id": "symptom-smoke-001",
+    "symptoms": "fever, cough, sore throat",
+    "disease": "influenza",
+    "label_space": ["influenza", "migraine"]
+  }
+]

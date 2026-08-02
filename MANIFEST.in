@@ -1,0 +1,17 @@
+include .github/CONTRIBUTING.md
+include .github/SECURITY.md
+include integrations/alfworld/MANIFEST.in
+include integrations/spreadsheetbench/MANIFEST.in
+recursive-include configs *.json
+recursive-include docs *.md *.png
+recursive-include examples *.json *.md
+recursive-include integrations/alfworld LICENSE *.json *.md *.py *.toml
+recursive-include integrations/spreadsheetbench LICENSE *.md *.py *.toml
+prune integrations/alfworld/build
+prune integrations/alfworld/dist
+prune integrations/alfworld/rethinkskill_alfworld-*
+prune integrations/spreadsheetbench/build
+prune integrations/spreadsheetbench/dist
+prune integrations/spreadsheetbench/rethinkskill_spreadsheetbench-*
+recursive-include scripts *.py
+recursive-include tests *.py

@@ -1,0 +1,8 @@
+[
+  {
+    "id": "finer-smoke-001",
+    "text": "The company reported Revenue of $10 million.",
+    "label": "Revenue",
+    "label_space": ["Revenue", "LongTermDebt"]
+  }
+]

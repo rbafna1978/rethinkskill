@@ -1,0 +1,8 @@
+[
+  {
+    "id": "lawbench-smoke-001",
+    "fact": "For this synthetic output-contract check, select the label robbery.",
+    "charges": ["robbery"],
+    "label_space": ["robbery", "theft"]
+  }
+]

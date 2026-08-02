@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package
+        run: python -m pip install -e ".[dev,spreadsheet]"
+      - name: Validate installed dependencies
+        run: python -m pip check
+      - name: Run zero-model tests
+        run: python -m pytest
+      - name: Run experimental integration tests
+        run: |
+          python -m pytest \
+            experimental/integrations/skillrl/tests \
+            experimental/integrations/mce/tests \
+            experimental/integrations/webshop/tests
+      - name: Static checks
+        run: ruff check src tests integrations experimental scripts
+      - name: Validate publication surface
+        run: python scripts/verify_publication.py
+      - name: Validate protocol planner
+        run: rethinkskill plan-protocol --benchmark searchqa
+      - name: Build release artifacts
+        if: matrix.python-version == '3.12'
+        run: |
+          python -m pip install build
+          python -m build --outdir dist/main
+          python -m build --outdir dist/alfworld integrations/alfworld
+          python -m build --outdir dist/spreadsheetbench \
+            integrations/spreadsheetbench
+          python -m build --outdir dist/skillrl \
+            experimental/integrations/skillrl
+          python -m build --outdir dist/mce \
+            experimental/integrations/mce
+          python -m build --outdir dist/webshop \
+            experimental/integrations/webshop
+          python scripts/verify_distributions.py \
+            dist/main dist/alfworld dist/spreadsheetbench dist/skillrl \
+            dist/mce dist/webshop
+          python scripts/verify_optional_integrations.py \
+            dist/main dist/alfworld dist/spreadsheetbench dist/skillrl \
+            dist/mce dist/webshop

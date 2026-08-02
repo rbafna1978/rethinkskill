@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rethinkskill-alfworld"
+version = "0.1.0"
+description = "Optional official-environment ALFWorld adapter for rethinkskill"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+  "rethinkskill>=1.1,<2",
+  "alfworld==0.4.2",
+]
+
+[project.entry-points."rethinkskill.harnesses"]
+alfworld = "rethinkskill_alfworld.plugin:spec"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

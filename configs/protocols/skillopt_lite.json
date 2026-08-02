@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "protocol_id": "rethinkskill_skillopt_lite",
+  "rounds": 10,
+  "arms": {
+    "normal": ["failed", "passed"],
+    "fail_only": ["failed"],
+    "success_only": ["passed"]
+  },
+  "conditions": {
+    "parent": null,
+    "normal_final": "normal",
+    "fail_only_final": "fail_only",
+    "success_only_final": "success_only"
+  },
+  "robustness_repeats": 3,
+  "benchmarks": {
+    "searchqa": {
+      "train_size": 40,
+      "validation_size": null,
+      "test_size": null,
+      "hard_dead_band": 0.01,
+      "soft_rescue_delta": 0.02,
+      "panels": [],
+      "unavailable_panels": []
+    },
+    "officeqa": {
+      "train_size": 40,
+      "validation_size": 49,
+      "test_size": 148,
+      "hard_dead_band": 0.02,
+      "soft_rescue_delta": null,
+      "panels": ["R1", "R2", "R3", "T1", "T2", "T3"],
+      "unavailable_panels": []
+    },
+    "docvqa": {
+      "train_size": 40,
+      "validation_size": 53,
+      "test_size": 374,
+      "hard_dead_band": 0.01,
+      "soft_rescue_delta": 0.02,
+      "panels": ["R1", "R2", "R3", "T1", "T2", "T3"],
+      "unavailable_panels": []
+    },
+    "livemath": {
+      "train_size": 36,
+      "validation_size": 35,
+      "test_size": 106,
+      "hard_dead_band": 0.01,
+      "soft_rescue_delta": null,
+      "panels": ["R1a", "R1b", "R2", "R3", "T2", "T3"],
+      "unavailable_panels": ["T1"]
+    },
+    "spreadsheetbench": {
+      "train_size": 40,
+      "validation_size": 39,
+      "test_size": 281,
+      "hard_dead_band": 0.02,
+      "soft_rescue_delta": 0.05,
+      "panels": ["R1", "R2", "R3", "T2", "T3"],
+      "unavailable_panels": ["T1"]
+    },
+    "alfworld": {
+      "train_size": 40,
+      "validation_size": 140,
+      "test_size": 134,
+      "hard_dead_band": 0.02,
+      "soft_rescue_delta": null,
+      "panels": ["R1", "R2", "R3", "T2", "T3"],
+      "unavailable_panels": ["T1"]
+    }
+  },
+  "evidence_note": "Sizes and gates are migrated from the maintained formal orchestrator family. Null values remain unresolved rather than inferred."
+}

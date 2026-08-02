@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rethinkskill-mce"
+version = "0.1.0"
+description = "Experimental Meta Context Engineering scorer and harness suite for rethinkskill"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+  "rethinkskill>=1.1,<1.2",
+]
+
+[project.entry-points."rethinkskill.benchmarks"]
+mce = "rethinkskill_mce.plugin:benchmark_specs"
+
+[project.entry-points."rethinkskill.harnesses"]
+mce = "rethinkskill_mce.plugin:harness_specs"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rethinkskill"
+version = "1.1.0"
+description = "Reproducible research code for controlled agent-skill evolution experiments"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "rethinkskill research team"}]
+dependencies = []
+
+[project.optional-dependencies]
+spreadsheet = [
+  "openpyxl>=3.1,<4",
+]
+dev = [
+  "pytest>=8",
+  "ruff>=0.4",
+]
+
+[project.scripts]
+rethinkskill = "rethinkskill.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  ".",
+  "src",
+  "integrations/alfworld/src",
+  "integrations/spreadsheetbench/src",
+  "experimental/integrations/skillrl/src",
+  "experimental/integrations/mce/src",
+  "experimental/integrations/webshop/src",
+]
+addopts = "-ra"
+testpaths = [
+  "tests",
+  "integrations/alfworld/tests",
+  "integrations/spreadsheetbench/tests",
+]
