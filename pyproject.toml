@@ -12,6 +12,10 @@ license = "MIT"
 authors = [{name = "rethinkskill research team"}]
 dependencies = []
 
+[project.urls]
+Paper = "https://arxiv.org/abs/2608.02636"
+Repository = "https://github.com/HKUST-KnowComp/rethinkskill"
+
 [project.optional-dependencies]
 spreadsheet = [
   "openpyxl>=3.1,<4",

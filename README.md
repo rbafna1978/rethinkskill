@@ -2,11 +2,12 @@
 
 <div align="center">
 
-### Rethinking Self-Evolving Agent Skills: Feedback Dynamics over Multiple Rounds
+### [Rethinking Self-Evolving Agent Skills: Feedback Dynamics over Multiple Rounds](https://arxiv.org/abs/2608.02636)
 
 A controlled study of how success and failure feedback shape self-evolving
 agent skills over multiple rounds.
 
+[![arXiv](https://img.shields.io/badge/arXiv-2608.02636-b31b1b.svg)](https://arxiv.org/abs/2608.02636)
 [![CI](https://github.com/HKUST-KnowComp/rethinkskill/actions/workflows/ci.yml/badge.svg)](https://github.com/HKUST-KnowComp/rethinkskill/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-2EA44F)](LICENSE)
@@ -363,7 +364,19 @@ forms, and host-specific user paths without printing matched secret values.
 
 ## Citation
 
-<!-- Paper citation and BibTeX will be added after the arXiv release. -->
+~~~bibtex
+@misc{liu2026rethinking,
+  title         = {Rethinking Self-Evolving Agent Skills: Feedback Dynamics over Multiple Rounds},
+  author        = {Yuxuan Liu and Zhaochen Su and Yuhao Zhang and Jiahe Guo and
+                   Zhongwei Xie and Huihao Jing and Lingyun Xie and Qing Zong and
+                   Yauwai Yim and Zhixiong Zhang and Haoran Li and Yangqiu Song},
+  year          = {2026},
+  eprint        = {2608.02636},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.SE},
+  url           = {https://arxiv.org/abs/2608.02636}
+}
+~~~
 
 ## License
 
