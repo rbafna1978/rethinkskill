@@ -15,11 +15,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-from rethinkskill.utils.serde import (
-    sha256_bytes,
-    sha256_file,
-    snapshot_regular_file,
-)
+from rethinkskill.utils.serde import snapshot_regular_file
 
 _PATH_ASSIGNMENT = re.compile(
     r"^\s*(INPUT_PATH|OUTPUT_PATH)\s*=\s*.+$",
@@ -256,7 +252,6 @@ def _stream_evidence(value: str) -> dict[str, object]:
     return {
         "present": bool(payload),
         "bytes": len(payload),
-        "sha256": sha256_bytes(payload),
     }
 
 
@@ -267,7 +262,7 @@ def run_generated_code(
     output_path: Path,
     timeout_seconds: int = 120,
 ) -> dict[str, object]:
-    """Execute a hash-bound workbook transform in a scoped child process."""
+    """Execute a workbook transform in a scoped child process."""
 
     resolved_input = input_path.resolve()
     resolved_output = output_path.resolve()
@@ -384,9 +379,6 @@ def run_generated_code(
         "timed_out": timed_out,
         "stdout_evidence": _stream_evidence(stdout),
         "stderr_evidence": _stream_evidence(stderr),
-        "output_sha256": (
-            sha256_file(resolved_output) if not failure and resolved_output.is_file() else None
-        ),
     }
 
 

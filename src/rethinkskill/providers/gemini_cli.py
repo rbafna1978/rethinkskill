@@ -14,7 +14,6 @@ from rethinkskill.providers.common import (
     freeze_zero_call_readiness,
     launch_failure_outcome,
     launch_failure_result_outcome,
-    launcher_drift_outcome,
     parse_json_object,
     probe_cli_contract,
     sanitized_process_streams,
@@ -22,8 +21,6 @@ from rethinkskill.providers.common import (
 from rethinkskill.providers.transport import (
     TransportConfig,
     TransportKind,
-    launcher_file_identity,
-    launcher_identity_matches,
     launcher_path,
     provider_environment_policy,
     provider_process_environment,
@@ -32,7 +29,7 @@ from rethinkskill.providers.transport import (
 from rethinkskill.runtime.tasks import RenderedTask
 from rethinkskill.runtime.types import ModelOutcome
 from rethinkskill.utils.process import execute
-from rethinkskill.utils.serde import atomic_write_json, freeze_json_mapping, thaw_json_mapping
+from rethinkskill.utils.serde import atomic_write_json, thaw_json_mapping
 
 _REQUIRED_FLAGS = (
     "--prompt",
@@ -49,14 +46,9 @@ class GeminiCliExecutor:
     launcher: Path
     model: str
     readiness: Mapping[str, object]
-    launcher_identity: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "readiness", freeze_zero_call_readiness(self.readiness))
-        if self.launcher_identity is not None:
-            object.__setattr__(
-                self, "launcher_identity", freeze_json_mapping(self.launcher_identity)
-            )
 
     @classmethod
     def prepare(cls, config: TransportConfig, *, authorized: bool) -> GeminiCliExecutor:
@@ -71,7 +63,6 @@ class GeminiCliExecutor:
             launcher=launcher,
             model=config.model,
             readiness=readiness,
-            launcher_identity=launcher_file_identity(launcher),
         )
 
     def public_manifest(self) -> Mapping[str, object]:
@@ -84,17 +75,11 @@ class GeminiCliExecutor:
             "environment_policy": provider_environment_policy("gemini-cli"),
             "native_executor": True,
         }
-        if self.launcher_identity is not None:
-            value["launcher_identity"] = thaw_json_mapping(self.launcher_identity)
         return value
 
     def execute(
         self, rendered: RenderedTask, *, workspace: Path, timeout_seconds: int
     ) -> ModelOutcome:
-        if self.launcher_identity is not None and (
-            not launcher_identity_matches(self.launcher, self.launcher_identity)
-        ):
-            return launcher_drift_outcome(self.launcher)
         atomic_write_json(
             workspace / ".gemini/settings.json",
             {

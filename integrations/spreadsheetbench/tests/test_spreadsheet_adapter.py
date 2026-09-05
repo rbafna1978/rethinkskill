@@ -45,7 +45,7 @@ class SpreadsheetRuntimeSafetyTests(unittest.TestCase):
         )
         self.assertNotIn(secret, str(caught.exception))
 
-    def test_child_streams_are_hashed_without_persisting_raw_text(self) -> None:
+    def test_child_streams_are_summarized_without_persisting_raw_text(self) -> None:
         secret = "spreadsheet-child-secret"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -64,6 +64,7 @@ class SpreadsheetRuntimeSafetyTests(unittest.TestCase):
         self.assertNotIn("stderr", result)
         self.assertTrue(result["stdout_evidence"]["present"])
         self.assertTrue(result["stderr_evidence"]["present"])
+        self.assertNotIn("sha256", result["stdout_evidence"])
 
 
 class _CodeExecutor:

@@ -23,11 +23,10 @@ from rethinkskill.providers.authorization import (
 from rethinkskill.utils.fs import OutputLock, Repository, utc_now
 from rethinkskill.utils.integrity import (
     EVOLUTION_RECEIPT_SCHEMA_VERSION,
-    bind_evidence_hash,
-    bind_manifest_hash,
-    bind_receipt_hash,
     boundary_failure,
     exact_call_counts,
+    freeze_manifest,
+    freeze_receipt,
     validate_frozen_plan_fields,
     validate_plan_manifest,
     validate_zero_call_preflight,
@@ -133,7 +132,7 @@ def plan_evolution(
         raise ConfigurationError(f"initial skill exceeds max_skill_chars={options.max_skill_chars}")
     run_root = repository.resolve_relative("runs", must_exist=False)
     safe_output = repository.validate_new_output(output_root, run_root)
-    preflight = bind_manifest_hash(
+    preflight = freeze_manifest(
         {
             "schema_version": 2,
             "status": "RETHINKSKILL_EVOLUTION_PREFLIGHT_PASS",
@@ -475,7 +474,7 @@ class OptimizationContext:
 
 OPTIMIZER_EVIDENCE_FILENAME = "PROPOSAL_EVIDENCE.json"
 
-OPTIMIZER_EVIDENCE_SCHEMA_VERSION = 1
+OPTIMIZER_EVIDENCE_SCHEMA_VERSION = 2
 
 
 def optimizer_artifact_inventory(run_root: Path, *, round_no: int) -> tuple[dict[str, object], ...]:
@@ -493,28 +492,18 @@ def write_optimizer_round_evidence(
     round_no: int,
     parent_sha256: str,
     proposal: ProposalOutcome,
-    optimizer_manifest: Mapping[str, object],
 ) -> dict[str, object]:
-    """Freeze one boundary-validated proposal and every plugin artifact."""
+    """Record one proposal and bind the files created by its optimizer."""
     round_root = run_root / "optimizer" / f"round_{round_no:04d}"
     round_root.mkdir(parents=True, exist_ok=True)
-    evidence = thaw_json_mapping(
-        bind_evidence_hash(
-            {
-                "schema_version": OPTIMIZER_EVIDENCE_SCHEMA_VERSION,
-                "status": "RETHINKSKILL_OPTIMIZER_EVIDENCE",
-                "round_no": round_no,
-                "parent_sha256": parent_sha256,
-                "optimizer_manifest_sha256": sha256_bytes(
-                    canonical_json_bytes(thaw_json_mapping(optimizer_manifest))
-                ),
-                "proposal": proposal.public(),
-                "artifacts": list(optimizer_artifact_inventory(run_root, round_no=round_no)),
-            },
-            hash_field="evidence_sha256",
-            label="optimizer proposal evidence",
-        )
-    )
+    evidence = {
+        "schema_version": OPTIMIZER_EVIDENCE_SCHEMA_VERSION,
+        "status": "RETHINKSKILL_OPTIMIZER_EVIDENCE",
+        "round_no": round_no,
+        "parent_sha256": parent_sha256,
+        "proposal": proposal.public(),
+        "artifacts": list(optimizer_artifact_inventory(run_root, round_no=round_no)),
+    }
     relative_path = Path("optimizer") / f"round_{round_no:04d}" / OPTIMIZER_EVIDENCE_FILENAME
     snapshot = atomic_write_json_snapshot(run_root / relative_path, evidence)
     return {"path": relative_path.as_posix(), "sha256": snapshot.sha256}
@@ -574,12 +563,11 @@ def initialize_evolution_artifacts(
     """Freeze authorization metadata and the exact initial skill."""
     control = plan.output_root / ".rethinkskill"
     manifest = thaw_json_mapping(
-        bind_manifest_hash(
+        freeze_manifest(
             {
                 **thaw_json_mapping(plan.preflight),
                 "status": "RETHINKSKILL_EVOLUTION_AUTHORIZED",
                 "authorized_at": utc_now(),
-                "static_preflight_sha256": plan.preflight["manifest_sha256"],
                 "evaluator": thaw_json_mapping(evaluator_manifest),
                 "optimizer": thaw_json_mapping(optimizer_manifest),
                 "evolution_receipt_schema_version": EVOLUTION_RECEIPT_SCHEMA_VERSION,
@@ -652,7 +640,7 @@ def finalize_evolution_artifacts(state: EvolutionFinalization) -> dict[str, obje
     ledger_path = plan.output_root / "EVOLUTION_LEDGER.jsonl"
     ledger_snapshot = atomic_write_snapshot(ledger_path, ledger)
     receipt = thaw_json_mapping(
-        bind_receipt_hash(
+        freeze_receipt(
             {
                 "schema_version": EVOLUTION_RECEIPT_SCHEMA_VERSION,
                 "status": "RETHINKSKILL_EVOLUTION_VALIDATED"
@@ -877,7 +865,6 @@ def execute_evolution_round(
     state: EvolutionExecutionState,
     evaluator: SkillEvaluator,
     optimizer: SkillOptimizer,
-    optimizer_manifest: Mapping[str, object],
     round_no: int,
     failure_stage: FailureStage,
 ) -> None:
@@ -921,7 +908,6 @@ def execute_evolution_round(
             round_no=round_no,
             parent_sha256=parent_hash,
             proposal=proposal,
-            optimizer_manifest=optimizer_manifest,
         )
         if not proposal_accounting_known:
             state.terminal_optimizer_evidence = optimizer_evidence
@@ -1102,7 +1088,6 @@ def execute_evolution(
                 state=state,
                 evaluator=evaluator,
                 optimizer=optimizer,
-                optimizer_manifest=optimizer_manifest,
                 round_no=round_no,
                 failure_stage=failure_stage,
             )

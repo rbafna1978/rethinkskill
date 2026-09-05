@@ -33,9 +33,11 @@ rethinkskill native-preflight \
   --limit 2
 ```
 
-Preflight resolves and hashes the benchmark, selected IDs, dataset records,
-skill, rendered task inputs, provider configuration, and output scope. It does
-not create a completed run or establish that a provider can answer correctly.
+Preflight hashes external inputs that can drift (dataset files, an optional ID
+file, the skill, and task assets). It stores normalized task contracts,
+provider configuration, and output scope directly instead of hashing those
+derived JSON objects again. It does not create a completed run or establish
+that a provider can answer correctly.
 
 `native-run` uses the same inputs and additionally requires
 `--authorize-model-calls`. Credentials are supplied through an environment
@@ -64,8 +66,10 @@ rethinkskill validate-run runs/<run>
 rethinkskill validate-evaluation runs/<evaluation>/manifest.json
 ```
 
-Validation checks hashes, schemas, result coverage, call accounting, lineage,
-and receipt bindings. It does not modify outputs, contact a model, or convert a
+Validation checks external artifact hashes, schemas, result coverage, call
+accounting, lineage, and receipt bindings. Manifests and receipts are strict
+JSON but do not carry self-hashes, which would not authenticate a mutable local
+file. Validation does not modify outputs, contact a model, or convert a
 historical run into a new scientific result.
 
 ## Development and release checks

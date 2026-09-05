@@ -279,17 +279,6 @@ class RegisteredSkillOptimizer:
         }
 
     def propose(self, context: OptimizationContext) -> ProposalOutcome:
-        try:
-            self.registration.require_current_distribution_identity()
-        except ConfigurationError:
-            return self._invalid_proposal(
-                context,
-                OptimizerCallAccounting(
-                    invocations=0, attempted_calls=0, completed_calls=0, known=True, violation=None
-                ),
-                failure_class="optimizer_runtime_identity_drift",
-                failure="optimizer plugin source identity drifted or is unavailable",
-            )
         self.executor_boundary.begin_proposal()
         try:
             candidate = self.optimizer.propose(context)
@@ -445,7 +434,6 @@ class OptimizerCatalog(SealableCatalog):
             getattr(executor, "execute", None)
         ):
             raise ConfigurationError("optimizer executor contract is incomplete")
-        registration.require_current_distribution_identity()
         executor_boundary = OptimizerExecutorBoundary(
             executor,
             freeze_component_manifest(executor, label="optimizer executor"),
@@ -520,8 +508,6 @@ def _prepare_optimizer_registration(
         entry_point_name=record.entry_point_name,
         distribution_name=record.distribution_name,
         distribution_version=record.distribution_version,
-        distribution_identity=record.distribution_identity,
-        _distribution_metadata=record._distribution_metadata,
     )
     registration.validate()
     return (spec.name, registration)

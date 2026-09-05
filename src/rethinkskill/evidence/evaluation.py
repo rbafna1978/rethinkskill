@@ -19,7 +19,6 @@ from rethinkskill.evidence.common import (
     json_object_snapshot,
     mapping,
 )
-from rethinkskill.utils.integrity import validate_manifest_hash
 from rethinkskill.utils.serde import RegularFileSnapshot, thaw_json_mapping
 
 
@@ -161,7 +160,6 @@ def validate_evaluation_evidence(
     """Replay current deterministic evaluation evidence without model calls."""
     path = manifest_path.expanduser().absolute()
     manifest, manifest_snapshot = json_object_snapshot(path, label="evaluation manifest")
-    validate_manifest_hash(manifest, label="evaluation manifest")
     schema_version = manifest.get("schema_version")
     if (
         schema_version != 4

@@ -16,7 +16,7 @@ from rethinkskill.benchmarks.scoring import Verdict, Verification, freeze_verifi
 from rethinkskill.errors import ConfigurationError, ResultValidationError
 from rethinkskill.integrations.catalog import IntegrationSpec
 from rethinkskill.utils.fs import OutputLock, utc_now
-from rethinkskill.utils.integrity import bind_manifest_hash
+from rethinkskill.utils.integrity import freeze_manifest
 from rethinkskill.utils.plugins import ExtensionRegistration
 from rethinkskill.utils.serde import (
     RegularFileSnapshot,
@@ -62,7 +62,7 @@ def evaluation_manifest(
         verdict.value: sum(row["verdict"] == verdict.value for row in verdicts)
         for verdict in Verdict
     }
-    return bind_manifest_hash(
+    return freeze_manifest(
         {
             "schema_version": 4,
             "status": "RETHINKSKILL_DETERMINISTIC_VERDICTS_FROZEN",
@@ -218,7 +218,6 @@ def resolve_deterministic_scoring_binding(
         raise ConfigurationError("evaluation capability requires an exact IntegrationSpec")
     spec.validate()
     registration.validate()
-    registration.require_current_distribution_identity()
     integration.validate()
     if (
         spec.name != benchmark
@@ -316,7 +315,6 @@ def evaluate_cases(
                 payload=payload,
                 created_at=utc_now(),
             )
-            binding.registration.require_current_distribution_identity()
             os.replace(staging_root, evidence_root)
             atomic_write(output_path, payload)
             atomic_write_json(manifest_path, manifest)

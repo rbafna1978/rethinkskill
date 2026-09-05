@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -63,12 +62,6 @@ class AlfWorldHarness:
     def dependency_manifest(self) -> Mapping[str, object]:
         return dict(self.environment_factory.dependency_manifest())
 
-    def runtime_identity(self) -> Mapping[str, object]:
-        probe = getattr(self.environment_factory, "runtime_identity", None)
-        if callable(probe):
-            return dict(probe())
-        return dict(self.environment_factory.dependency_manifest())
-
     def provenance_files(
         self,
         source: Path,
@@ -122,7 +115,7 @@ class AlfWorldHarness:
                 )
                 raw_id = record.get("id")
                 if raw_id is None:
-                    task_id = hashlib.sha256(raw_gamefile.encode("utf-8")).hexdigest()[:20]
+                    task_id = f"gamefile:{Path(raw_gamefile).as_posix()}"
                 elif type(raw_id) is str and raw_id.strip():
                     task_id = raw_id.strip()
                 else:

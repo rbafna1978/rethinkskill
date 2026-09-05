@@ -9,12 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from rethinkskill.errors import ConfigurationError, ResultValidationError
-from rethinkskill.runtime.types import (
-    distribution_file_identity,
-    package_tree_identity,
-    probe_distribution,
-    python_executable_identity,
-)
+from rethinkskill.runtime.types import probe_distribution
 from rethinkskill.utils.integrity import boundary_failure
 from rethinkskill.utils.serde import freeze_json_mapping
 
@@ -53,8 +48,6 @@ class AlfWorldEpisode(Protocol):
 
 class AlfWorldEnvironmentFactory(Protocol):
     def dependency_manifest(self) -> Mapping[str, object]: ...
-
-    def runtime_identity(self) -> Mapping[str, object]: ...
 
     def open(
         self,
@@ -164,18 +157,6 @@ class InstalledAlfWorldFactory:
             "kind": "installed_alfworld",
             **dependency,
             "alfworld_available": dependency["module_available"],
-        }
-
-    def runtime_identity(self) -> Mapping[str, object]:
-        dependency = self.dependency_manifest()
-        if dependency.get("ready") is not True:
-            raise ConfigurationError("ALFWorld runtime identity requires alfworld==0.4.2")
-        return {
-            "schema_version": 1,
-            "kind": "installed_alfworld",
-            "python_executable": python_executable_identity(),
-            "adapter_package": package_tree_identity(Path(__file__)),
-            "distribution": distribution_file_identity("alfworld"),
         }
 
     def _configuration(

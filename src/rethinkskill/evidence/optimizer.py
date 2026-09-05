@@ -6,13 +6,12 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
-from rethinkskill.errors import ConfigurationError, ResultValidationError
+from rethinkskill.errors import ResultValidationError
 from rethinkskill.evidence.common import (
     artifact_snapshot,
     invalid,
     json_object,
     mapping,
-    sha256_digest,
 )
 from rethinkskill.evolution.loop import (
     OPTIMIZER_EVIDENCE_FILENAME,
@@ -22,13 +21,9 @@ from rethinkskill.evolution.loop import (
 )
 from rethinkskill.runtime.tasks import RenderedTask
 from rethinkskill.runtime.types import ModelOutcome
-from rethinkskill.utils.integrity import validate_evidence_hash
 from rethinkskill.utils.serde import (
-    canonical_json_bytes,
-    sha256_bytes,
     snapshot_regular_file,
     strict_json_loads,
-    thaw_json_mapping,
 )
 
 _EVIDENCE_KEYS = {
@@ -36,10 +31,8 @@ _EVIDENCE_KEYS = {
     "status",
     "round_no",
     "parent_sha256",
-    "optimizer_manifest_sha256",
     "proposal",
     "artifacts",
-    "evidence_sha256",
 }
 
 _EXECUTION_KEYS = {
@@ -196,12 +189,6 @@ def replay_optimizer_proposal(
         ) from exc
     if type(evidence) is not dict or set(evidence) != _EVIDENCE_KEYS:
         invalid(f"optimizer round {round_no} evidence schema is invalid")
-    try:
-        validate_evidence_hash(
-            evidence, hash_field="evidence_sha256", label=f"optimizer round {round_no} evidence"
-        )
-    except ConfigurationError as exc:
-        raise ResultValidationError(str(exc)) from exc
     frozen_proposal = mapping(
         evidence.get("proposal"), label=f"optimizer round {round_no} frozen proposal"
     )
@@ -215,15 +202,6 @@ def replay_optimizer_proposal(
         or (proposal is not None and frozen_proposal != dict(proposal))
     ):
         invalid(f"optimizer round {round_no} evidence binding is invalid")
-    sha256_digest(
-        evidence.get("optimizer_manifest_sha256"),
-        label=f"optimizer round {round_no} manifest SHA-256",
-    )
-    expected_manifest_sha256 = sha256_bytes(
-        canonical_json_bytes(thaw_json_mapping(optimizer_manifest))
-    )
-    if evidence["optimizer_manifest_sha256"] != expected_manifest_sha256:
-        invalid(f"optimizer round {round_no} manifest binding drifted")
     artifacts = evidence.get("artifacts")
     if type(artifacts) is not list or artifacts != list(
         optimizer_artifact_inventory(run_root, round_no=round_no)

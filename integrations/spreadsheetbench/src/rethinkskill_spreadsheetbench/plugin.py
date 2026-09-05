@@ -12,8 +12,8 @@ def spec() -> NativeHarnessSpec:
         name="spreadsheetbench",
         harness=SpreadsheetBenchHarness(),
         execution_scope=(
-            "spreadsheetbench_single_codegen; hash-bound "
-            "workbooks; bounded Python artifact execution; "
+            "spreadsheetbench_single_codegen; frozen input workbooks; "
+            "bounded Python artifact execution; "
             "official answer-cell value evaluation"
         ),
         source="rethinkskill_spreadsheetbench_schema",

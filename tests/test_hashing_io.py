@@ -8,12 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from rethinkskill.errors import ConfigurationError
 from rethinkskill.utils.integrity import (
-    bind_manifest_hash,
-    bind_receipt_hash,
-    validate_manifest_hash,
-    validate_receipt_hash,
+    freeze_manifest,
+    freeze_receipt,
 )
 from rethinkskill.utils.serde import (
     RegularFileSnapshot,
@@ -23,14 +20,12 @@ from rethinkskill.utils.serde import (
     atomic_write_json_snapshot,
     atomic_write_snapshot,
     canonical_json_bytes,
-    digest_tree,
     read_json,
     read_json_snapshot,
     sha256_bytes,
     sha256_file,
     snapshot_regular_file,
     strict_json_loads,
-    thaw_json_mapping,
 )
 
 
@@ -121,49 +116,26 @@ class HashingAndIOTests(unittest.TestCase):
             ):
                 canonical_json_bytes(value)
 
-    def test_manifest_self_hash_rejects_nested_tampering(self) -> None:
+    def test_manifest_freeze_detaches_nested_values(self) -> None:
         source = {"status": "PASS", "nested": {"value": 1}}
-        manifest = bind_manifest_hash(source)
+        manifest = freeze_manifest(source)
         source["nested"]["value"] = 99
         self.assertEqual(manifest["nested"]["value"], 1)
-        self.assertEqual(
-            validate_manifest_hash(manifest, label="test manifest"),
-            manifest["manifest_sha256"],
-        )
+        self.assertNotIn("manifest_sha256", manifest)
         with self.assertRaises(TypeError):
             manifest["nested"]["value"] = 2
-        tampered = thaw_json_mapping(manifest)
-        tampered["nested"]["value"] = 2
-        with self.assertRaisesRegex(
-            ConfigurationError,
-            "test manifest integrity check failed",
-        ):
-            validate_manifest_hash(
-                tampered,
-                label="test manifest",
-            )
 
-    def test_receipt_self_hash_rejects_terminal_field_tampering(self) -> None:
-        receipt = bind_receipt_hash(
+    def test_receipt_freeze_is_immutable_without_self_hash(self) -> None:
+        receipt = freeze_receipt(
             {
                 "schema_version": 3,
                 "status": "VALIDATED",
                 "calls": {"attempted": 1, "completed": 1},
             }
         )
-        self.assertEqual(
-            validate_receipt_hash(receipt, label="test receipt"),
-            receipt["receipt_sha256"],
-        )
+        self.assertNotIn("receipt_sha256", receipt)
         with self.assertRaises(TypeError):
             receipt["calls"]["completed"] = 0
-        tampered = thaw_json_mapping(receipt)
-        tampered["calls"]["completed"] = 0
-        with self.assertRaisesRegex(
-            ConfigurationError,
-            "test receipt integrity check failed",
-        ):
-            validate_receipt_hash(tampered, label="test receipt")
 
     def test_strict_json_loading_rejects_non_standard_constants(self) -> None:
         for value in (
@@ -209,32 +181,6 @@ class HashingAndIOTests(unittest.TestCase):
             self.assertEqual(value, {"state": "original"})
             self.assertEqual(snapshot.payload, original)
             self.assertEqual(snapshot.sha256, sha256_bytes(original))
-
-    def test_tree_digest_changes_with_content(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            path = root / "value.txt"
-            path.write_text("first", encoding="utf-8")
-            first = digest_tree(root)
-            path.write_text("second", encoding="utf-8")
-            second = digest_tree(root)
-            self.assertNotEqual(first.sha256, second.sha256)
-            self.assertEqual(second.files, 1)
-
-    def test_strict_tree_digest_rejects_symlinks_and_special_files(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "source.txt"
-            source.write_text("value", encoding="utf-8")
-            link = root / "link.txt"
-            link.symlink_to(source)
-            with self.assertRaisesRegex(ValueError, "must not contain symlinks"):
-                digest_tree(root, reject_symlinks=True)
-            link.unlink()
-            fifo = root / "pipe"
-            os.mkfifo(fifo)
-            with self.assertRaisesRegex(ValueError, "special files"):
-                digest_tree(root, reject_special_files=True)
 
     def test_atomic_json_is_canonical(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

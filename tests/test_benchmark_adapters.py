@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from rethinkskill.benchmarks.capabilities import CapabilityCatalog
 from rethinkskill.benchmarks.core import (
     DETERMINISTIC_BENCHMARKS,
     BenchmarkCatalog,
@@ -25,7 +23,6 @@ from rethinkskill.errors import (
     ConfigurationError,
     ResultValidationError,
 )
-from rethinkskill.evaluation.core import evaluate_cases
 
 
 class BenchmarkCaseAdapterTests(unittest.TestCase):
@@ -382,83 +379,7 @@ class BenchmarkCaseAdapterTests(unittest.TestCase):
             "rethinkskill-benchmark-test",
         )
         self.assertEqual(registration["distribution_version"], "0.0.1")
-        self.assertFalse(registration["external_source_freeze_required"])
-        self.assertEqual(
-            registration["distribution_identity"]["distribution"],
-            "rethinkskill-benchmark-test",
-        )
-        self.assertEqual(registration["distribution_identity"]["files"], 1)
-
-    def test_evaluation_rejects_scorer_distribution_drift_before_publish(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "plugin.py"
-            source.write_text("value = 1\n", encoding="utf-8")
-
-            def drifting_adapter(row, base):
-                del row, base
-                source.write_text("value = 2\n", encoding="utf-8")
-                return Verification(Verdict.PASS, "ok")
-
-            spec = BenchmarkSpec(
-                name="drift-scorer",
-                family="test",
-                domain="test",
-                mode=EvaluationMode.CASES,
-                metrics=("pass_rate",),
-                adapter=drifting_adapter,
-            )
-
-            class Distribution:
-                metadata = {"Name": "rethinkskill-benchmark-drift-test"}
-                version = "1.0"
-                files = (Path("plugin.py"),)
-
-                @staticmethod
-                def locate_file(item: Path) -> Path:
-                    return root / item
-
-            class EntryPoint:
-                name = "drift-scorer"
-                value = "fixture:SPEC"
-                dist = Distribution()
-
-                @staticmethod
-                def load():
-                    return spec
-
-            class EntryPoints:
-                @staticmethod
-                def select(*, group):
-                    if group != "rethinkskill.benchmarks":
-                        raise AssertionError(group)
-                    return (EntryPoint(),)
-
-            scorers = BenchmarkCatalog()
-            with patch(
-                "rethinkskill.utils.plugins.metadata.entry_points",
-                return_value=EntryPoints(),
-            ):
-                scorers.load_entry_points()
-            catalog = CapabilityCatalog(scorers, HarnessCatalog())
-            cases = root / "cases.jsonl"
-            cases.write_text(
-                json.dumps({"case_id": "one"}) + "\n",
-                encoding="utf-8",
-            )
-            output = root / "verdicts.jsonl"
-            with self.assertRaisesRegex(ConfigurationError, "identity drifted"):
-                evaluate_cases(
-                    benchmark="drift-scorer",
-                    input_path=cases,
-                    output_path=output,
-                    catalog=catalog,
-                )
-            self.assertFalse(output.exists())
-            self.assertFalse(output.with_suffix(".jsonl.manifest.json").exists())
-            self.assertFalse(output.with_name("verdicts.jsonl.evidence").exists())
+        self.assertNotIn("distribution_identity", registration)
 
     def test_builtin_registration_provenance_is_catalog_owned(self) -> None:
         manifest = benchmark_catalog().manifest()
@@ -468,7 +389,6 @@ class BenchmarkCaseAdapterTests(unittest.TestCase):
             all(
                 benchmark["registration"]["source"] == "builtin"
                 and benchmark["registration"]["component_kind"] == "benchmark"
-                and not benchmark["registration"]["external_source_freeze_required"]
                 for benchmark in manifest["benchmarks"]
             )
         )

@@ -12,7 +12,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from rethinkskill.errors import ConfigurationError, MissingArtifactError
-from rethinkskill.utils.serde import snapshot_regular_file
 
 
 class TransportKind(str, Enum):
@@ -168,34 +167,6 @@ def launcher_path(config: TransportConfig, default: str) -> Path:
     if not located or not Path(located).is_file():
         raise MissingArtifactError(f"transport launcher is absent: {value}")
     return Path(located).resolve()
-
-
-def launcher_file_identity(launcher: Path) -> dict[str, object]:
-    """Freeze the resolved executable bytes used by one CLI provider."""
-    resolved = launcher.expanduser().resolve()
-    try:
-        snapshot = snapshot_regular_file(resolved)
-    except (OSError, ValueError) as exc:
-        raise ConfigurationError(
-            f"transport launcher identity is unavailable: {type(exc).__name__}"
-        ) from exc
-    return {"path": str(resolved), "sha256": snapshot.sha256, "size": snapshot.size}
-
-
-def launcher_identity_matches(launcher: Path, expected: Mapping[str, object]) -> bool:
-    """Return whether the current launcher bytes match a frozen identity."""
-    if (
-        type(expected) is not dict
-        or set(expected) != {"path", "sha256", "size"}
-        or type(expected.get("path")) is not str
-        or (type(expected.get("sha256")) is not str)
-        or (type(expected.get("size")) is not int)
-    ):
-        return False
-    try:
-        return launcher_file_identity(launcher) == expected
-    except ConfigurationError:
-        return False
 
 
 _ENVIRONMENT_NAME = re.compile("^[A-Za-z_][A-Za-z0-9_]*$")

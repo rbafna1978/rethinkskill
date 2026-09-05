@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import tarfile
 import zipfile
@@ -114,10 +113,8 @@ def _verify_source_identity(
 
 def _report(path: Path, payloads: dict[str, bytes]) -> dict[str, object]:
     _forbidden(set(payloads))
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {
         "path": str(path),
-        "sha256": digest,
         "files": len(payloads),
         "bytes": sum(len(payload) for payload in payloads.values()),
     }

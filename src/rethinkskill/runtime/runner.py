@@ -46,11 +46,10 @@ from rethinkskill.utils.fs import OutputLock, Repository, utc_now
 from rethinkskill.utils.integrity import (
     NATIVE_RECEIPT_SCHEMA_VERSION,
     CallCounts,
-    bind_evidence_hash,
-    bind_manifest_hash,
-    bind_receipt_hash,
     boundary_failure,
     exact_call_counts,
+    freeze_manifest,
+    freeze_receipt,
     safe_exception_type,
     validate_frozen_plan_fields,
     validate_plan_manifest,
@@ -64,9 +63,7 @@ from rethinkskill.utils.serde import (
     atomic_write_json,
     atomic_write_json_snapshot,
     atomic_write_snapshot,
-    canonical_json_bytes,
     freeze_json_mapping,
-    sha256_bytes,
     snapshot_regular_file,
     thaw_json_mapping,
     thaw_json_value,
@@ -403,54 +400,6 @@ class NativeCatalog(Protocol):
     def resolve_capability(self, name: str) -> BenchmarkCapability: ...
 
 
-RUNTIME_IDENTITY_FILENAME = "RUNTIME_IDENTITY.json"
-
-RUNTIME_IDENTITY_SCHEMA_VERSION = 1
-
-
-def runtime_identity_sha256(value: Mapping[str, object]) -> str:
-    """Return the canonical digest of one detached runtime identity."""
-    return sha256_bytes(canonical_json_bytes(thaw_json_mapping(value)))
-
-
-def write_runtime_identity_evidence(
-    control: Path, *, planned: Mapping[str, object], observed: Mapping[str, object]
-) -> tuple[dict[str, object], bool]:
-    """Persist pre/post runtime identity comparison and return its reference."""
-    planned_value = thaw_json_mapping(planned)
-    observed_value = thaw_json_mapping(observed)
-    planned_sha256 = runtime_identity_sha256(planned_value)
-    observed_sha256 = runtime_identity_sha256(observed_value)
-    stable = planned_value == observed_value
-    evidence = thaw_json_mapping(
-        bind_evidence_hash(
-            {
-                "schema_version": RUNTIME_IDENTITY_SCHEMA_VERSION,
-                "status": "RETHINKSKILL_RUNTIME_IDENTITY_STABLE"
-                if stable
-                else "RETHINKSKILL_RUNTIME_IDENTITY_DRIFTED",
-                "planned": planned_value,
-                "observed": observed_value,
-                "planned_sha256": planned_sha256,
-                "observed_sha256": observed_sha256,
-                "stable": stable,
-                "model_calls": 0,
-            },
-            hash_field="evidence_sha256",
-            label="runtime identity evidence",
-        )
-    )
-    snapshot = atomic_write_json_snapshot(control / RUNTIME_IDENTITY_FILENAME, evidence)
-    return (
-        {
-            "path": f".rethinkskill/{RUNTIME_IDENTITY_FILENAME}",
-            "sha256": snapshot.sha256,
-            "stable": stable,
-        },
-        stable,
-    )
-
-
 def freeze_native_tasks(tasks: tuple[NativeTask, ...]) -> tuple[NativeTask, ...]:
     """Detach task payloads into immutable-plan JSON snapshots."""
     if type(tasks) is not tuple:
@@ -499,11 +448,6 @@ def native_task_contract(tasks: tuple[NativeTask, ...]) -> list[dict[str, object
             }
         )
     return rows
-
-
-def native_task_contract_sha256(tasks: tuple[NativeTask, ...]) -> str:
-    """Hash the exact normalized task, workspace, payload, and asset contract."""
-    return sha256_bytes(canonical_json_bytes(native_task_contract(tasks)))
 
 
 def freeze_rendered_tasks(
@@ -559,12 +503,6 @@ def rendered_task_contract(
             }
         )
     return rows
-
-
-def rendered_task_contract_sha256(
-    tasks: tuple[NativeTask, ...], rendered_tasks: tuple[RenderedTask, ...]
-) -> str:
-    return sha256_bytes(canonical_json_bytes(rendered_task_contract(tasks, rendered_tasks)))
 
 
 @dataclass(slots=True)
@@ -827,7 +765,7 @@ def result_payload(
 
 NATIVE_TASK_EVIDENCE_FILENAME = "TASK_EVIDENCE.json"
 
-NATIVE_TASK_EVIDENCE_SCHEMA_VERSION = 1
+NATIVE_TASK_EVIDENCE_SCHEMA_VERSION = 2
 
 
 def native_task_artifact_inventory(
@@ -844,34 +782,19 @@ def write_native_task_evidence(
     run_root: Path,
     *,
     task: NativeTask,
-    rendered: RenderedTask,
     result: Mapping[str, object],
-    executor_manifest: Mapping[str, object],
 ) -> dict[str, object]:
-    """Freeze the task contract, final row, and exact task artifact set."""
-    task_record = native_task_contract((task,))[0]
-    rendered_record = rendered_task_contract((task,), (rendered,))[0]
-    evidence = thaw_json_mapping(
-        bind_evidence_hash(
-            {
-                "schema_version": NATIVE_TASK_EVIDENCE_SCHEMA_VERSION,
-                "status": "RETHINKSKILL_NATIVE_TASK_EVIDENCE",
-                "task_id": task.task_id,
-                "workspace_name": task.workspace_name,
-                "task_contract_sha256": sha256_bytes(canonical_json_bytes(task_record)),
-                "rendered_contract_sha256": sha256_bytes(canonical_json_bytes(rendered_record)),
-                "executor_manifest_sha256": sha256_bytes(
-                    canonical_json_bytes(thaw_json_mapping(executor_manifest))
-                ),
-                "result": thaw_json_mapping(result),
-                "artifacts": list(
-                    native_task_artifact_inventory(run_root, workspace_name=task.workspace_name)
-                ),
-            },
-            hash_field="evidence_sha256",
-            label="native task evidence",
-        )
-    )
+    """Record the final row and bind files created for one task."""
+    evidence = {
+        "schema_version": NATIVE_TASK_EVIDENCE_SCHEMA_VERSION,
+        "status": "RETHINKSKILL_NATIVE_TASK_EVIDENCE",
+        "task_id": task.task_id,
+        "workspace_name": task.workspace_name,
+        "result": thaw_json_mapping(result),
+        "artifacts": list(
+            native_task_artifact_inventory(run_root, workspace_name=task.workspace_name)
+        ),
+    }
     relative_path = Path("tasks") / task.workspace_name / NATIVE_TASK_EVIDENCE_FILENAME
     snapshot = atomic_write_json_snapshot(run_root / relative_path, evidence)
     return {"path": relative_path.as_posix(), "sha256": snapshot.sha256}
@@ -883,10 +806,8 @@ def finalize_native_results(
     state: NativeRunState,
     run_manifest_snapshot: RegularFileSnapshot,
     executor_manifest: Mapping[str, object],
-    runtime_identity: Mapping[str, object],
-    runtime_identity_stable: bool,
 ) -> dict[str, object]:
-    """Publish the exact ledger bytes and assemble a self-hashed receipt."""
+    """Publish the exact ledger bytes and bind them from the terminal receipt."""
     ledger_payload = b"".join(
         (
             json.dumps(
@@ -916,10 +837,9 @@ def finalize_native_results(
         and (state.attempted_calls >= len(plan.tasks))
         and (state.completed_calls == state.attempted_calls)
         and (not execution_failure_ids)
-        and runtime_identity_stable
     )
     return thaw_json_mapping(
-        bind_receipt_hash(
+        freeze_receipt(
             {
                 "schema_version": NATIVE_RECEIPT_SCHEMA_VERSION,
                 "status": "RETHINKSKILL_NATIVE_EXECUTION_VALIDATED"
@@ -943,7 +863,6 @@ def finalize_native_results(
                 },
                 "ledger_validation": validation.to_dict(),
                 "executor": executor_manifest,
-                "runtime_identity": thaw_json_mapping(runtime_identity),
             }
         )
     )
@@ -961,38 +880,7 @@ def resolve_native_capability(catalog: NativeCatalog, benchmark: str) -> Benchma
         )
     assert capability.scoring_registration is not None
     assert capability.native_registration is not None
-    capability.scoring_registration.require_current_distribution_identity()
-    capability.native_registration.require_current_distribution_identity()
     return capability
-
-
-def native_runtime_identity(
-    capability: BenchmarkCapability, *, observed: bool = False
-) -> dict[str, object]:
-    """Combine harness runtime state with selected plugin package identities."""
-    if type(observed) is not bool:
-        raise ConfigurationError("runtime identity observation flag must be boolean")
-    capability = validate_native_capability(capability, benchmark=capability.name)
-    assert capability.native is not None
-    assert capability.scoring_registration is not None
-    assert capability.native_registration is not None
-    base = capability.native.runtime_identity()
-    sources: dict[str, object] = {}
-    for label, registration in (
-        ("scoring", capability.scoring_registration),
-        ("harness", capability.native_registration),
-    ):
-        if registration.source != "entry_point":
-            continue
-        identity = (
-            registration.observe_distribution_identity()
-            if observed
-            else registration.require_current_distribution_identity()
-        )
-        sources[label] = identity
-    if not sources:
-        return base
-    return {"benchmark_runtime": base, "extension_distributions": sources}
 
 
 FailureStage = Callable[[str], AbstractContextManager[None]]
@@ -1002,7 +890,6 @@ def execute_native_tasks(
     plan: NativeRunPlan,
     *,
     executor: ObservedModelExecutor,
-    executor_manifest: Mapping[str, object],
     state: NativeRunState,
     failure_stage: FailureStage,
 ) -> None:
@@ -1073,9 +960,7 @@ def execute_native_tasks(
             state.task_evidence[task.task_id] = write_native_task_evidence(
                 plan.output_root,
                 task=task,
-                rendered=rendered,
                 result=row,
-                executor_manifest=executor_manifest,
             )
         state.rows.append(row)
         if execution.abort_after_task:
@@ -1130,9 +1015,7 @@ def _selection_manifest(plan: NativeRunPlan) -> dict[str, object]:
         "task_assets": {
             task.task_id: [asset.public() for asset in task.assets] for task in plan.tasks
         },
-        "task_contract_sha256": native_task_contract_sha256(plan.tasks),
         "task_contract": native_task_contract(plan.tasks),
-        "rendered_contract_sha256": rendered_task_contract_sha256(plan.tasks, plan.rendered_tasks),
         "rendered_contract": rendered_task_contract(plan.tasks, plan.rendered_tasks),
         "count": len(plan.tasks),
         "seed": plan.options.seed,
@@ -1155,8 +1038,10 @@ def validate_native_plan_freeze(plan: NativeRunPlan) -> str:
     validate_native_capability(plan.capability, benchmark=plan.capability.name)
     plan.options.validate()
     preflight = validate_plan_manifest(plan.preflight, label="native preflight")
-    if preflight.get("schema_version") != 9:
-        raise ConfigurationError("native preflight schema must be 9")
+    if preflight.get("schema_version") != NATIVE_RECEIPT_SCHEMA_VERSION:
+        raise ConfigurationError(
+            f"native preflight schema must be {NATIVE_RECEIPT_SCHEMA_VERSION}"
+        )
     run_root = plan.repository.resolve_relative("runs", must_exist=False)
     safe_output = validate_frozen_output_scope(
         repository=plan.repository,
@@ -1189,7 +1074,6 @@ def validate_native_plan_freeze(plan: NativeRunPlan) -> str:
     expected = {
         "benchmark": plan.spec.name,
         "capability": plan.capability.public(),
-        "runtime_identity": native_runtime_identity(plan.capability),
         "dataset": expected_dataset,
         "skill": expected_skill,
         "selection": _selection_manifest(plan),
@@ -1303,16 +1187,14 @@ def plan_native_run(
             )
         )
     rendered_tasks = freeze_rendered_tasks(spec.harness, tasks, skill_text)
-    runtime_identity = native_runtime_identity(capability)
     ids_file = frozen_options.ids_file if frozen_options.ids_file is not None else None
-    preflight = bind_manifest_hash(
+    preflight = freeze_manifest(
         {
-            "schema_version": 9,
+            "schema_version": NATIVE_RECEIPT_SCHEMA_VERSION,
             "status": "RETHINKSKILL_NATIVE_PREFLIGHT_PASS",
             "created_at": utc_now(),
             "benchmark": benchmark,
             "capability": capability.public(),
-            "runtime_identity": runtime_identity,
             "dataset": {
                 "path": str(resolved_dataset),
                 "files": [
@@ -1335,9 +1217,7 @@ def plan_native_run(
                 "task_assets": {
                     task.task_id: [asset.public() for asset in task.assets] for task in tasks
                 },
-                "task_contract_sha256": native_task_contract_sha256(tasks),
                 "task_contract": native_task_contract(tasks),
-                "rendered_contract_sha256": rendered_task_contract_sha256(tasks, rendered_tasks),
                 "rendered_contract": rendered_task_contract(tasks, rendered_tasks),
                 "count": len(tasks),
                 "seed": frozen_options.seed,
@@ -1375,12 +1255,11 @@ def execute_native_plan(
         control = plan.output_root / ".rethinkskill"
         run_manifest_path = control / "RUN_MANIFEST.json"
         run_manifest = thaw_json_mapping(
-            bind_manifest_hash(
+            freeze_manifest(
                 {
                     **thaw_json_mapping(plan.preflight),
                     "status": "RETHINKSKILL_NATIVE_EXECUTION_AUTHORIZED",
                     "authorized_at": utc_now(),
-                    "static_preflight_sha256": plan.preflight["manifest_sha256"],
                     "executor": executor_manifest,
                     "process_receipt_schema_version": NATIVE_RECEIPT_SCHEMA_VERSION,
                 }
@@ -1400,23 +1279,15 @@ def execute_native_plan(
         execute_native_tasks(
             plan,
             executor=observed_executor,
-            executor_manifest=executor_manifest,
             state=state,
             failure_stage=failure_stage,
         )
         with failure_stage("ledger_publication"):
-            runtime_identity, runtime_identity_stable = write_runtime_identity_evidence(
-                control,
-                planned=plan.preflight["runtime_identity"],
-                observed=native_runtime_identity(plan.capability, observed=True),
-            )
             receipt = finalize_native_results(
                 plan,
                 state=state,
                 run_manifest_snapshot=run_manifest_snapshot,
                 executor_manifest=executor_manifest,
-                runtime_identity=runtime_identity,
-                runtime_identity_stable=runtime_identity_stable,
             )
         with failure_stage("receipt_publication"):
             atomic_write_json(control / "PROCESS_RECEIPT.json", receipt)

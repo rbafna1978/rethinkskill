@@ -454,8 +454,6 @@ def _prepare_benchmark_registration(
         entry_point_name=record.entry_point_name,
         distribution_name=record.distribution_name,
         distribution_version=record.distribution_version,
-        distribution_identity=record.distribution_identity,
-        _distribution_metadata=record._distribution_metadata,
     )
     registration.validate()
     return (spec.name, registration)

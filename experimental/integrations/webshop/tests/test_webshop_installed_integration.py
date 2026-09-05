@@ -19,11 +19,6 @@ class InstalledWebShopIntegrationTests(unittest.TestCase):
         factory = SubprocessWebShopFactory.from_environment()
         manifest = factory.dependency_manifest()
         self.assertTrue(manifest["ready"], manifest)
-        identity = factory.runtime_identity()
-        self.assertEqual(identity["schema_version"], 3)
-        self.assertTrue(identity["python_environment_packages_frozen"])
-        self.assertTrue(identity["java_runtime_files_frozen"])
-        self.assertGreater(identity["java_runtime_tree"]["files"], 0)
         with tempfile.TemporaryDirectory() as temporary:
             episode = factory.open(
                 session=0,

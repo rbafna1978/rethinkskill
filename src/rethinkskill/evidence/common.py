@@ -8,7 +8,6 @@ from io import BytesIO
 from pathlib import Path
 
 from rethinkskill.errors import ResultValidationError
-from rethinkskill.utils.integrity import validate_manifest_hash, validate_receipt_hash
 from rethinkskill.utils.serde import RegularFileSnapshot, snapshot_regular_file, strict_json_loads
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -148,7 +147,6 @@ def manifest_receipt_pair(
         receipt_path,
         label=receipt_label,
     )
-    validate_manifest_hash(manifest, label=manifest_label)
     if type(schema_version) is not int:
         invalid("receipt schema support declaration is invalid")
     declared = manifest.get(declaration_field)
@@ -156,7 +154,6 @@ def manifest_receipt_pair(
         invalid(f"{manifest_label} does not declare {receipt_label} schema {schema_version}")
     if receipt.get("schema_version") != declared:
         invalid(f"{receipt_label} schema does not match its manifest")
-    validate_receipt_hash(receipt, label=receipt_label)
     _validate_artifact_snapshot(
         receipt.get("run_manifest"),
         snapshot=manifest_snapshot,

@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping
 
 from rethinkskill.errors import ConfigurationError
 from rethinkskill.utils.integrity import (
-    bind_manifest_hash,
+    freeze_manifest,
     validate_frozen_plan_fields,
     validate_plan_manifest,
     validate_zero_call_preflight,
@@ -34,7 +34,7 @@ class PlanIntegrityTests(unittest.TestCase):
                     raise RuntimeError("caller mapping was read twice")
                 return self.source.items()
 
-        manifest = bind_manifest_hash({"status": "PASS", "model_calls": 0})
+        manifest = freeze_manifest({"status": "PASS", "model_calls": 0})
         source = ReadOnceMapping(manifest)
         snapshot = validate_plan_manifest(source, label="test preflight")
         self.assertEqual(snapshot["status"], "PASS")
@@ -46,7 +46,7 @@ class PlanIntegrityTests(unittest.TestCase):
             "model_calls": 0,
             "nested": {"items": ["one"]},
         }
-        manifest = bind_manifest_hash(source)
+        manifest = freeze_manifest(source)
         snapshot = validate_plan_manifest(manifest, label="test preflight")
         snapshot["nested"]["items"].append("two")  # type: ignore[index,union-attr]
         self.assertEqual(manifest["nested"]["items"], ("one",))  # type: ignore[index]

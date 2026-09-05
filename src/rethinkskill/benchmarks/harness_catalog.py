@@ -71,15 +71,6 @@ class NativeHarnessSpec:
             self.harness, method_name="dependency_manifest", label=f"{self.name} runtime dependency"
         )
 
-    def runtime_identity(self) -> dict[str, object]:
-        """Freeze expensive run-scoped runtime provenance when supplied."""
-        probe = getattr(self.harness, "runtime_identity", None)
-        if not callable(probe):
-            return {}
-        return freeze_mapping_manifest(
-            self.harness, method_name="runtime_identity", label=f"{self.name} runtime identity"
-        )
-
     @staticmethod
     def _runtime_ready(dependency: dict[str, object]) -> bool:
         if "ready" in dependency:
@@ -224,8 +215,6 @@ def _prepare_harness_registration(
         entry_point_name=record.entry_point_name,
         distribution_name=record.distribution_name,
         distribution_version=record.distribution_version,
-        distribution_identity=record.distribution_identity,
-        _distribution_metadata=record._distribution_metadata,
     )
     registration.validate()
     return (spec.name, registration)

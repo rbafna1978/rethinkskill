@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -19,12 +19,7 @@ from rethinkskill.utils.plugins import (
     load_plugin_spec_records,
     prepare_plugin_spec_batch,
 )
-from rethinkskill.utils.release import (
-    freeze_component_manifest,
-    observe_distribution_file_identity,
-    validate_distribution_file_identity,
-)
-from rethinkskill.utils.serde import thaw_json_mapping
+from rethinkskill.utils.release import freeze_component_manifest
 
 
 def _validate_optional_identity_text(value: object, *, label: str) -> str | None:
@@ -42,7 +37,7 @@ def _validate_optional_identity_text(value: object, *, label: str) -> str | None
 
 @dataclass(frozen=True, slots=True)
 class ProviderRegistration:
-    """Catalog-owned origin metadata that plugin code cannot override."""
+    """Catalog-owned provider origin and installed version metadata."""
 
     name: str
     transport_kind: TransportKind
@@ -51,20 +46,10 @@ class ProviderRegistration:
     entry_point_name: str | None = None
     distribution_name: str | None = None
     distribution_version: str | None = None
-    distribution_identity: Mapping[str, object] | None = None
-    _distribution_metadata: object | None = field(default=None, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        if self.distribution_identity is not None:
-            object.__setattr__(
-                self,
-                "distribution_identity",
-                validate_distribution_file_identity(self.distribution_identity),
-            )
 
     @classmethod
     def from_public(cls, value: object) -> ProviderRegistration:
-        """Reconstruct old or content-bound serialized provider provenance."""
+        """Reconstruct serialized provider provenance."""
         keys = {
             "name",
             "transport_kind",
@@ -73,13 +58,9 @@ class ProviderRegistration:
             "entry_point_name",
             "distribution_name",
             "distribution_version",
-            "external_source_freeze_required",
         }
-        accepted = (keys, keys | {"distribution_identity"})
-        if type(value) is not dict or set(value) not in accepted:
+        if type(value) is not dict or set(value) != keys:
             raise ConfigurationError("provider registration has an invalid public schema")
-        if type(value["external_source_freeze_required"]) is not bool:
-            raise ConfigurationError("provider registration freeze requirement must be boolean")
         try:
             transport_kind = TransportKind(value["transport_kind"])
         except (TypeError, ValueError) as exc:
@@ -92,9 +73,6 @@ class ProviderRegistration:
             entry_point_name=cast(str | None, value["entry_point_name"]),
             distribution_name=cast(str | None, value["distribution_name"]),
             distribution_version=cast(str | None, value["distribution_version"]),
-            distribution_identity=cast(
-                Mapping[str, object] | None, value.get("distribution_identity")
-            ),
         )
         registration.validate()
         if registration.public() != value:
@@ -123,44 +101,14 @@ class ProviderRegistration:
         if self.source != "entry_point" and (
             self.distribution_name is not None
             or self.distribution_version is not None
-            or self.distribution_identity is not None
         ):
-            raise ConfigurationError("non-plugin provider cannot declare distribution identity")
+            raise ConfigurationError("non-plugin provider cannot declare distribution metadata")
         if (self.distribution_name is None) != (self.distribution_version is None):
             raise ConfigurationError("provider distribution name and version must be paired")
-        if self.distribution_identity is not None:
-            if self.distribution_name is None or self.distribution_version is None:
-                raise ConfigurationError("provider distribution content identity is incomplete")
-            validate_distribution_file_identity(
-                self.distribution_identity,
-                name=self.distribution_name,
-                version=self.distribution_version,
-            )
-
-    def observe_distribution_identity(self) -> dict[str, object]:
-        """Observe current plugin package content without exposing raw failures."""
-        return observe_distribution_file_identity(
-            self._distribution_metadata,
-            name=self.distribution_name,
-            version=self.distribution_version,
-        )
-
-    def require_current_distribution_identity(self) -> dict[str, object] | None:
-        """Fail closed when a selected provider plugin is unfrozen or drifts."""
-        self.validate()
-        if self.source != "entry_point":
-            return None
-        if self.distribution_identity is None:
-            raise ConfigurationError(f"entry-point provider source is not frozen: {self.name}")
-        observed = self.observe_distribution_identity()
-        expected = thaw_json_mapping(self.distribution_identity)
-        if observed != expected:
-            raise ConfigurationError(f"entry-point provider source identity drifted: {self.name}")
-        return observed
 
     def public(self) -> dict[str, object]:
         self.validate()
-        value = {
+        return {
             "name": self.name,
             "transport_kind": self.transport_kind.value,
             "source": self.source,
@@ -168,12 +116,7 @@ class ProviderRegistration:
             "entry_point_name": self.entry_point_name,
             "distribution_name": self.distribution_name,
             "distribution_version": self.distribution_version,
-            "external_source_freeze_required": self.source != "builtin"
-            and self.distribution_identity is None,
         }
-        if self.distribution_identity is not None:
-            value["distribution_identity"] = thaw_json_mapping(self.distribution_identity)
-        return value
 
 
 if TYPE_CHECKING:
@@ -337,19 +280,6 @@ class RegisteredProviderExecutor:
     def execute(
         self, rendered: RenderedTask, *, workspace: Path, timeout_seconds: int
     ) -> ModelOutcome:
-        try:
-            self.registration.require_current_distribution_identity()
-        except ConfigurationError:
-            return ModelOutcome(
-                status="FAILED",
-                response="",
-                raw="",
-                process={"provider_registration": {"source_identity": "drifted_or_unavailable"}},
-                attempted_calls=0,
-                completed_calls=0,
-                failure_class="runtime_identity_drift",
-                failure="provider plugin source identity drifted or is unavailable",
-            )
         return freeze_model_outcome(
             self.executor.execute(rendered, workspace=workspace, timeout_seconds=timeout_seconds)
         )
@@ -423,7 +353,6 @@ class ProviderCatalog(SealableCatalog):
             raise AuthorizationRequiredError(
                 "provider preparation requires explicit model-call authorization"
             )
-        registration.require_current_distribution_identity()
         try:
             candidate = spec.prepare(config, authorized=True, role=role)
         except Exception as exc:
@@ -508,8 +437,6 @@ def _prepare_provider_registration(
             entry_point_name=record.entry_point_name,
             distribution_name=record.distribution_name,
             distribution_version=record.distribution_version,
-            distribution_identity=record.distribution_identity,
-            _distribution_metadata=record._distribution_metadata,
         )
         registration.validate()
     except Exception as exc:

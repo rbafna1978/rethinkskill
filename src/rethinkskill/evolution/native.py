@@ -25,9 +25,8 @@ from rethinkskill.runtime.runner import (
 from rethinkskill.runtime.types import ModelExecutor
 from rethinkskill.utils.fs import Repository
 from rethinkskill.utils.integrity import (
-    bind_manifest_hash,
     exact_call_counts,
-    validate_manifest_hash,
+    freeze_manifest,
 )
 from rethinkskill.utils.release import freeze_component_manifest
 from rethinkskill.utils.serde import (
@@ -361,7 +360,7 @@ def freeze_native_evolution_inputs(
         }
         for role, plan in plans.items()
     }
-    manifest = bind_manifest_hash(
+    manifest = freeze_manifest(
         {
             "schema_version": 5,
             "status": "RETHINKSKILL_NATIVE_EVOLUTION_INPUTS_FROZEN",
@@ -431,10 +430,6 @@ def validate_frozen_inputs(frozen: FrozenNativeEvolutionInputs) -> None:
     """Validate the detached freeze envelope and current source hashes."""
     if type(frozen) is not FrozenNativeEvolutionInputs:
         raise ResultValidationError("native evolution requires exact FrozenNativeEvolutionInputs")
-    try:
-        validate_manifest_hash(frozen.manifest, label="native evolution input freeze")
-    except Exception as exc:
-        raise ResultValidationError(str(exc)) from exc
     if not frozen.dataset.exists():
         raise ResultValidationError(f"native evolution dataset is absent: {frozen.dataset}")
     if (

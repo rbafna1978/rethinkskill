@@ -12,7 +12,7 @@ src/rethinkskill/
 ├── evaluation/    deterministic case evaluation and result ledgers
 ├── evidence/      offline validation of run, evaluation, and evolution outputs
 ├── integrations/  built-in and external capability declarations
-├── utils/         hashing, serialization, process, filesystem, and plugin tools
+├── utils/         file snapshots, serialization, process, filesystem, and plugins
 └── cli/           the `rethinkskill` command-line interface
 ```
 

@@ -108,7 +108,6 @@ def finalize_cli_outcome(
         failure=failure,
     )
 
-
 def embedded_prompt(rendered: RenderedTask) -> str:
     """Render identical benchmark content for CLIs and direct chat APIs."""
     return f"# Skill\n\n{rendered.skill_markdown}\n\n# Task\n\n{rendered.task_markdown}\n\n# Invocation\n\n{rendered.invocation}\n"
@@ -229,24 +228,4 @@ def launch_failure_result_outcome(result: ProcessResult) -> ModelOutcome:
         completed_calls=0,
         failure_class="transport_error",
         failure=failure,
-    )
-
-
-def launcher_drift_outcome(launcher: Path) -> ModelOutcome:
-    """Reject a CLI whose executable bytes changed after preparation."""
-    return ModelOutcome(
-        status="FAILED",
-        response="",
-        raw="",
-        process={
-            "launcher": str(launcher),
-            "launched": False,
-            "returncode": None,
-            "timed_out": False,
-            "runtime_identity": {"stable": False},
-        },
-        attempted_calls=0,
-        completed_calls=0,
-        failure_class="runtime_identity_drift",
-        failure="provider CLI launcher changed after preparation",
     )

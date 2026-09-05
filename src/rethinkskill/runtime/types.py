@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib import metadata, util
@@ -11,15 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from rethinkskill.benchmarks.scoring import Verification
-from rethinkskill.errors import ConfigurationError
 from rethinkskill.runtime.tasks import NativeTask, RenderedTask
 from rethinkskill.utils.integrity import exact_call_counts
-from rethinkskill.utils.release import distribution_file_identity_from_metadata
 from rethinkskill.utils.serde import (
     canonical_json_bytes,
-    digest_tree,
     freeze_json_mapping,
-    snapshot_regular_file,
     thaw_json_mapping,
 )
 
@@ -50,54 +45,6 @@ def probe_distribution(
         "requirement": requirement,
         "version_compatible": compatible,
     }
-
-
-def regular_file_identity(path: Path, *, follow_symlink: bool = False) -> dict[str, object]:
-    """Freeze one resolved runtime file under an explicit symlink policy."""
-    source = path.expanduser().absolute()
-    if source.is_symlink() and (not follow_symlink):
-        raise ConfigurationError("runtime file identity must not be a symlink")
-    resolved = source.resolve()
-    try:
-        snapshot = snapshot_regular_file(resolved)
-    except (OSError, ValueError) as exc:
-        raise ConfigurationError(
-            f"runtime file identity is unavailable: {type(exc).__name__}"
-        ) from exc
-    return {"path": str(resolved), "sha256": snapshot.sha256, "size": snapshot.size}
-
-
-def python_executable_identity() -> dict[str, object]:
-    """Freeze the exact interpreter executable used by an optional runtime."""
-    return regular_file_identity(Path(sys.executable), follow_symlink=True)
-
-
-def distribution_file_identity(
-    distribution: str, *, allowed_roots: tuple[Path, ...] | None = None
-) -> dict[str, object]:
-    """Hash every installed file declared by one Python distribution."""
-    try:
-        installed = metadata.distribution(distribution)
-    except metadata.PackageNotFoundError as exc:
-        raise ConfigurationError(f"runtime distribution is not installed: {distribution}") from exc
-    return distribution_file_identity_from_metadata(
-        installed, name=distribution, version=installed.version, allowed_roots=allowed_roots
-    )
-
-
-def package_tree_identity(module_file: Path) -> dict[str, object]:
-    """Freeze one imported adapter package without cache or absolute paths."""
-    package_root = module_file.expanduser().absolute().parent
-    try:
-        identity = digest_tree(
-            package_root, reject_symlinks=True, reject_special_files=True
-        ).to_dict()
-    except (OSError, ValueError) as exc:
-        raise ConfigurationError(
-            f"adapter package identity is unavailable: {type(exc).__name__}"
-        ) from exc
-    identity.pop("root")
-    return identity
 
 
 if TYPE_CHECKING:

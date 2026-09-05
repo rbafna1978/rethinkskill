@@ -74,14 +74,6 @@ class WebShopHarness:
     def dependency_manifest(self) -> Mapping[str, object]:
         return dict(self.environment_factory.dependency_manifest())
 
-    def runtime_identity(self) -> Mapping[str, object]:
-        probe = getattr(self.environment_factory, "runtime_identity", None)
-        if callable(probe):
-            return dict(probe())
-        # Test doubles and third-party factories still receive an exact,
-        # run-scoped identity rather than silently opting out.
-        return dict(self.environment_factory.dependency_manifest())
-
     def provenance_files(
         self,
         source: Path,

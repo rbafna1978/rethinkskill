@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,11 +21,8 @@ from rethinkskill.runtime.tasks import (
 from rethinkskill.runtime.types import (
     ModelExecutor,
     ModelOutcome,
-    distribution_file_identity,
     numeric_version,
-    package_tree_identity,
     probe_distribution,
-    python_executable_identity,
 )
 from rethinkskill.utils.integrity import boundary_failure, safe_exception_type
 from rethinkskill.utils.serde import atomic_write, thaw_json_mapping
@@ -131,18 +127,6 @@ class SpreadsheetBenchHarness:
             "kind": "offline_python_codegen",
             **dependency,
             "openpyxl_available": dependency["module_available"],
-        }
-
-    def runtime_identity(self) -> Mapping[str, object]:
-        dependency = self.dependency_manifest()
-        if dependency.get("ready") is not True:
-            raise ConfigurationError("SpreadsheetBench runtime identity requires openpyxl>=3.1,<4")
-        return {
-            "schema_version": 1,
-            "kind": "offline_python_codegen",
-            "python_executable": python_executable_identity(),
-            "adapter_package": package_tree_identity(Path(__file__)),
-            "distribution": distribution_file_identity("openpyxl"),
         }
 
     def provenance_files(
@@ -412,9 +396,6 @@ class SpreadsheetBenchHarness:
                 **thaw_json_mapping(provider_outcome.process),
                 "artifact_runner": {
                     "kind": "offline_python_codegen",
-                    "code_sha256": (
-                        hashlib.sha256(code.encode("utf-8")).hexdigest() if code else None
-                    ),
                     "extraction_error": extraction_error,
                     "cases": execution_rows,
                 },

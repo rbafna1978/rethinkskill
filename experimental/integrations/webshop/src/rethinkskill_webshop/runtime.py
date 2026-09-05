@@ -8,7 +8,6 @@ import os
 import re
 import selectors
 import signal
-import stat
 import subprocess
 import time
 from collections.abc import Mapping
@@ -17,18 +16,9 @@ from pathlib import Path
 from typing import Protocol, TextIO
 
 from rethinkskill.errors import ConfigurationError
-from rethinkskill.runtime.types import package_tree_identity
 from rethinkskill.utils.serde import (
-    digest_tree,
     freeze_json_mapping,
-    snapshot_regular_file,
     strict_json_loads,
-)
-from rethinkskill_webshop.environment_identity import (
-    build_child_environment,
-    java_executable_identity,
-    probe_python_environment_identity,
-    python_executable_identity,
 )
 
 _ROOT_ENV = "RETHINKSKILL_WEBSHOP_ROOT"
@@ -47,7 +37,11 @@ _ERROR_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
 def _child_environment() -> dict[str, str]:
-    return build_child_environment(_CHILD_ENVIRONMENT_ALLOWLIST)
+    environment = {
+        key: os.environ[key] for key in _CHILD_ENVIRONMENT_ALLOWLIST if key in os.environ
+    }
+    environment.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"})
+    return environment
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,8 +77,6 @@ class WebShopEpisode(Protocol):
 
 class WebShopEnvironmentFactory(Protocol):
     def dependency_manifest(self) -> Mapping[str, object]: ...
-
-    def runtime_identity(self) -> Mapping[str, object]: ...
 
     def open(
         self,
@@ -292,147 +284,19 @@ class SubprocessWebShopFactory:
             "java_home": str(java_home) if java_home is not None else None,
             "java": str(java) if java is not None else None,
             "checkout_root": str(root) if root is not None else None,
-            "environment_source_sha256": (
-                snapshot_regular_file(environment_source).sha256
-                if environment_source is not None
-                and environment_source.is_file()
-                and not environment_source.is_symlink()
-                else None
-            ),
             "configuration_environment": {
                 "python": _PYTHON_ENV,
                 "java_home": _JAVA_HOME_ENV,
                 "checkout_root": _ROOT_ENV,
             },
-            "formal_runtime_identity_required": True,
-            "python_distribution_inventory": ("content_hash_required_at_plan_and_completion"),
-            "java_runtime_inventory": ("content_hash_required_at_plan_and_completion"),
             "child_environment_allowlist": list(_CHILD_ENVIRONMENT_ALLOWLIST),
         }
-
-    @staticmethod
-    def _file_identity(path: Path) -> dict[str, object]:
-        snapshot = snapshot_regular_file(path)
-        return {
-            "path": str(path),
-            "sha256": snapshot.sha256,
-            "size": snapshot.size,
-        }
-
-    @staticmethod
-    def _python_executable_identity(path: Path) -> dict[str, object]:
-        return python_executable_identity(path)
-
-    @staticmethod
-    def _java_executable_identity(path: Path) -> dict[str, object]:
-        return java_executable_identity(path)
-
-    @staticmethod
-    def _tree_identity(path: Path) -> dict[str, object]:
-        return digest_tree(
-            path,
-            excluded_names=(),
-            reject_symlinks=True,
-            reject_special_files=True,
-        ).to_dict()
-
-    @staticmethod
-    def _java_tree_identity(path: Path) -> dict[str, object]:
-        root = path.expanduser().resolve(strict=True)
-        for base, directories, files in os.walk(
-            root,
-            topdown=True,
-            followlinks=False,
-        ):
-            for name in sorted(directories + files):
-                candidate = Path(base) / name
-                if not stat.S_ISLNK(candidate.lstat().st_mode):
-                    continue
-                try:
-                    candidate.resolve(strict=True).relative_to(root)
-                except (OSError, ValueError) as exc:
-                    raise ConfigurationError(
-                        "WebShop Java runtime contains an external or broken symlink"
-                    ) from exc
-        return digest_tree(
-            root,
-            excluded_names=(),
-            reject_symlinks=False,
-            reject_special_files=True,
-        ).to_dict()
-
-    def _python_environment_identity(self) -> dict[str, object]:
-        assert self.root is not None
-        assert self.python is not None
-        probe = Path(__file__).with_name("environment_probe.py").resolve(strict=True)
-        return probe_python_environment_identity(
-            python=self.python,
-            checkout_root=self.root,
-            probe=probe,
-            environment=_child_environment(),
-        )
 
     def _runtime_environment(self) -> dict[str, str]:
         assert self.java_home is not None
         environment = _child_environment()
         environment[_JAVA_HOME_ENV] = str(self.java_home.expanduser().resolve(strict=True))
         return environment
-
-    def runtime_identity(self) -> Mapping[str, object]:
-        """Freeze code and data actually consumed by the WebShop bridge."""
-
-        dependency = self.dependency_manifest()
-        if dependency.get("ready") is not True:
-            raise ConfigurationError("WebShop runtime identity requires a ready official runtime")
-        assert self.root is not None
-        assert self.python is not None
-        assert self.java_home is not None
-        root = self.root.resolve(strict=True)
-        python = self.python.expanduser().absolute()
-        java_home = self.java_home.expanduser().resolve(strict=True)
-        java = java_home / "bin/java"
-        bridge = Path(__file__).with_name("bridge.py").resolve(strict=True)
-        environment_probe = Path(__file__).with_name("environment_probe.py").resolve(strict=True)
-        web_agent_site_tree = self._tree_identity(root / "web_agent_site")
-        data_tree = self._tree_identity(root / "data")
-        search_engine_tree = self._tree_identity(root / "search_engine")
-        python_environment = self._python_environment_identity()
-        java_runtime_tree = self._java_tree_identity(java_home)
-        python_runtime = python_environment.get("python")
-        if (
-            type(python_runtime) is not dict
-            or python_runtime.get("implementation") != "cpython"
-            or python_runtime.get("version", [])[:2] != [3, 8]
-        ):
-            raise ConfigurationError("official WebShop runtime requires CPython 3.8")
-        return {
-            "schema_version": 3,
-            "kind": "official_webshop_subprocess",
-            "python_executable": self._python_executable_identity(python),
-            "python_environment": python_environment,
-            "java_executable": self._java_executable_identity(java),
-            "java_runtime_tree": java_runtime_tree,
-            "adapter_bridge": self._file_identity(bridge),
-            "environment_probe": self._file_identity(environment_probe),
-            "adapter_package": package_tree_identity(Path(__file__)),
-            "web_agent_site_tree": web_agent_site_tree,
-            "data_tree": data_tree,
-            "search_engine_tree": search_engine_tree,
-            "identity_scope": [
-                "python_executable",
-                "python_environment",
-                "java_executable",
-                "java_runtime_tree",
-                "adapter_bridge",
-                "environment_probe",
-                "adapter_package",
-                "web_agent_site_tree",
-                "data_tree",
-                "search_engine_tree",
-            ],
-            "python_environment_packages_frozen": True,
-            "java_runtime_files_frozen": True,
-        }
 
     def open(
         self,

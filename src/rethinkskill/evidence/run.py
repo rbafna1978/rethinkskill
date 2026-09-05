@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from rethinkskill.errors import ConfigurationError, ResultValidationError
+from rethinkskill.errors import ResultValidationError
 from rethinkskill.evaluation.results import validate_ids, validate_ledger_snapshot
 from rethinkskill.evidence.common import (
     artifact_snapshot,
@@ -24,7 +24,6 @@ from rethinkskill.evidence.common import (
     sha256_digest,
 )
 from rethinkskill.evidence.interactive import replay_interactive_evidence
-from rethinkskill.evidence.runtime import replay_runtime_identity_evidence
 from rethinkskill.providers.authorization import (
     TERMINAL_FAILURE_FILENAME,
     TERMINAL_FAILURE_SCHEMA_VERSION,
@@ -41,13 +40,10 @@ from rethinkskill.utils.integrity import (
     EVOLUTION_RECEIPT_SCHEMA_VERSION,
     NATIVE_RECEIPT_SCHEMA_VERSION,
     exact_call_counts,
-    validate_evidence_hash,
-    validate_manifest_hash,
 )
 from rethinkskill.utils.release import regular_file_inventory
 from rethinkskill.utils.serde import (
     canonical_json_bytes,
-    sha256_bytes,
     snapshot_regular_file,
     strict_json_loads,
     thaw_json_mapping,
@@ -76,19 +72,10 @@ def task_workspaces(
 def replay_task_contract(
     selection: dict[str, object], *, expected_ids: tuple[str, ...], workspaces: dict[str, object]
 ) -> dict[str, dict[str, object]]:
-    """Replay the frozen task contract and its canonical digest."""
+    """Replay the complete frozen task contract."""
     raw_contract = selection.get("task_contract")
     if type(raw_contract) is not list or len(raw_contract) != len(expected_ids):
         invalid("native task contract has an invalid row count")
-    expected_digest = sha256_digest(
-        selection.get("task_contract_sha256"), label="native task contract SHA-256"
-    )
-    try:
-        observed_digest = sha256_bytes(canonical_json_bytes(raw_contract))
-    except Exception:
-        invalid("native task contract is not canonical JSON")
-    if observed_digest != expected_digest:
-        invalid("native task contract does not match its manifest digest")
     assets_by_id = mapping(selection.get("task_assets"), label="native task assets")
     rows: dict[str, dict[str, object]] = {}
     for index, raw in enumerate(raw_contract):
@@ -112,19 +99,10 @@ def replay_task_contract(
 def replay_rendered_contract(
     selection: dict[str, object], *, expected_ids: tuple[str, ...], workspaces: dict[str, object]
 ) -> dict[str, dict[str, object]]:
-    """Replay the frozen rendered task contract and canonical digest."""
+    """Replay the complete frozen rendered task contract."""
     raw_contract = selection.get("rendered_contract")
     if type(raw_contract) is not list or len(raw_contract) != len(expected_ids):
         invalid("native rendered contract has an invalid row count")
-    expected_digest = sha256_digest(
-        selection.get("rendered_contract_sha256"), label="native rendered contract SHA-256"
-    )
-    try:
-        observed_digest = sha256_bytes(canonical_json_bytes(raw_contract))
-    except Exception:
-        invalid("native rendered contract is not canonical JSON")
-    if observed_digest != expected_digest:
-        invalid("native rendered contract does not match its manifest digest")
     rows: dict[str, dict[str, object]] = {}
     expected_keys = {
         "task_id",
@@ -256,7 +234,6 @@ def replay_native_rows(
             evidence_reference=task_evidence[task_id],
             task_record=task_contract[task_id],
             rendered_record=rendered_contract[task_id],
-            executor_manifest=mapping(manifest.get("executor"), label="native executor manifest"),
             row=row,
             replay_interactive=True,
         )
@@ -472,7 +449,6 @@ def validate_terminal_failure_evidence(run_root: Path) -> dict[str, object]:
     evidence, failure_snapshot = json_object_snapshot(
         failure_path, label="terminal failure evidence"
     )
-    validate_evidence_hash(evidence, hash_field="failure_sha256", label="terminal failure evidence")
     expected_keys = {
         "schema_version",
         "status",
@@ -484,7 +460,6 @@ def validate_terminal_failure_evidence(run_root: Path) -> dict[str, object]:
         "run_manifest",
         "artifacts",
         "scientific_completion_claimed",
-        "failure_sha256",
     }
     if (
         set(evidence) != expected_keys
@@ -520,7 +495,6 @@ def validate_terminal_failure_evidence(run_root: Path) -> dict[str, object]:
         invalid("terminal failure run manifest is invalid")
     if type(manifest) is not dict:
         invalid("terminal failure run manifest is not an object")
-    validate_manifest_hash(manifest, label=f"{run_kind} run manifest")
     status, receipt_schema, declaration = _MANIFEST_CONTRACTS[run_kind]
     if manifest.get("status") != status or manifest.get(declaration) != receipt_schema:
         invalid("terminal failure run manifest contract is invalid")
@@ -650,18 +624,12 @@ def validate_native_evidence(run_root: Path) -> dict[str, object]:
         or (receipt.get("executor") != manifest.get("executor"))
     ):
         invalid("native receipt summary does not match frozen artifacts")
-    runtime_identity_stable, runtime_identity_sha256 = replay_runtime_identity_evidence(
-        run_root=run_root,
-        manifest_identity=manifest.get("runtime_identity"),
-        reference=receipt.get("runtime_identity"),
-    )
     successful = (
         report["status"] == "STRUCTURALLY_VALID"
         and call_accounting_known
         and (attempted >= len(expected_ids))
         and (completed == attempted)
         and (not failure_ids)
-        and runtime_identity_stable
     )
     expected_status = (
         "RETHINKSKILL_NATIVE_EXECUTION_VALIDATED"
@@ -681,7 +649,6 @@ def validate_native_evidence(run_root: Path) -> dict[str, object]:
             "scorer_replayed_rows": row_replay.scorer_replayed_rows,
             "task_evidence_rows": row_replay.task_evidence_rows,
             "interactive_step_evidence_rows": row_replay.interactive_step_evidence_rows,
-            "runtime_identity_sha256": runtime_identity_sha256,
         },
     }
 
@@ -691,12 +658,8 @@ _EVIDENCE_KEYS = {
     "status",
     "task_id",
     "workspace_name",
-    "task_contract_sha256",
-    "rendered_contract_sha256",
-    "executor_manifest_sha256",
     "result",
     "artifacts",
-    "evidence_sha256",
 }
 
 
@@ -708,7 +671,6 @@ def replay_native_task_evidence(
     evidence_reference: object,
     task_record: Mapping[str, object],
     rendered_record: Mapping[str, object],
-    executor_manifest: Mapping[str, object],
     row: Mapping[str, object],
     replay_interactive: bool,
 ) -> int:
@@ -725,12 +687,6 @@ def replay_native_task_evidence(
         raise ResultValidationError(f"native task {task_id!r} evidence is not strict JSON") from exc
     if type(evidence) is not dict or set(evidence) != _EVIDENCE_KEYS:
         invalid(f"native task {task_id!r} evidence schema is invalid")
-    try:
-        validate_evidence_hash(
-            evidence, hash_field="evidence_sha256", label=f"native task {task_id!r} evidence"
-        )
-    except ConfigurationError as exc:
-        raise ResultValidationError(str(exc)) from exc
     if (
         evidence.get("schema_version") != NATIVE_TASK_EVIDENCE_SCHEMA_VERSION
         or evidence.get("status") != "RETHINKSKILL_NATIVE_TASK_EVIDENCE"
@@ -742,17 +698,6 @@ def replay_native_task_evidence(
         )
     ):
         invalid(f"native task {task_id!r} evidence binding is invalid")
-    expected_hashes = {
-        "task_contract_sha256": sha256_bytes(canonical_json_bytes(dict(task_record))),
-        "rendered_contract_sha256": sha256_bytes(canonical_json_bytes(dict(rendered_record))),
-        "executor_manifest_sha256": sha256_bytes(
-            canonical_json_bytes(thaw_json_mapping(executor_manifest))
-        ),
-    }
-    for field, expected in expected_hashes.items():
-        sha256_digest(evidence.get(field), label=f"native task {task_id!r} {field}")
-        if evidence[field] != expected:
-            invalid(f"native task {task_id!r} {field} drifted")
     artifacts = evidence.get("artifacts")
     if type(artifacts) is not list or artifacts != list(
         native_task_artifact_inventory(run_root, workspace_name=workspace_name)

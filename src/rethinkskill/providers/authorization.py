@@ -15,17 +15,14 @@ from rethinkskill.errors import (
 )
 from rethinkskill.utils.fs import Repository, utc_now
 from rethinkskill.utils.integrity import (
-    bind_evidence_hash,
     exact_call_counts,
     safe_exception_type,
-    validate_manifest_hash,
 )
 from rethinkskill.utils.release import regular_file_inventory
 from rethinkskill.utils.serde import (
     atomic_write_json,
     snapshot_regular_file,
     strict_json_loads,
-    thaw_json_mapping,
 )
 
 
@@ -78,7 +75,7 @@ def initialize_fresh_output_root(output_root: Path, *, label: str) -> None:
 
 TERMINAL_FAILURE_FILENAME = "TERMINAL_FAILURE.json"
 
-TERMINAL_FAILURE_SCHEMA_VERSION = 1
+TERMINAL_FAILURE_SCHEMA_VERSION = 2
 
 _RUN_CONTRACTS = MappingProxyType(
     {
@@ -189,28 +186,21 @@ def write_terminal_failure(
     manifest = strict_json_loads(manifest_snapshot.payload)
     if type(manifest) is not dict:
         raise ResultValidationError("terminal failure manifest is not an object")
-    validate_manifest_hash(manifest, label=f"{run_kind} run manifest")
     artifacts = regular_file_inventory(
         root, relative_to=root, excluded=(failure_path,), label=f"{run_kind} partial run artifacts"
     )
-    evidence = thaw_json_mapping(
-        bind_evidence_hash(
-            {
-                "schema_version": TERMINAL_FAILURE_SCHEMA_VERSION,
-                "status": "RETHINKSKILL_FRAMEWORK_FAILURE",
-                "created_at": utc_now(),
-                "run_kind": run_kind,
-                "phase": phase,
-                "exception_type": safe_exception_type(exception),
-                "calls": {name: calls[name].public() for name in components},
-                "run_manifest": {"path": manifest_relative, "sha256": manifest_snapshot.sha256},
-                "artifacts": list(artifacts),
-                "scientific_completion_claimed": False,
-            },
-            hash_field="failure_sha256",
-            label="terminal failure evidence",
-        )
-    )
+    evidence = {
+        "schema_version": TERMINAL_FAILURE_SCHEMA_VERSION,
+        "status": "RETHINKSKILL_FRAMEWORK_FAILURE",
+        "created_at": utc_now(),
+        "run_kind": run_kind,
+        "phase": phase,
+        "exception_type": safe_exception_type(exception),
+        "calls": {name: calls[name].public() for name in components},
+        "run_manifest": {"path": manifest_relative, "sha256": manifest_snapshot.sha256},
+        "artifacts": list(artifacts),
+        "scientific_completion_claimed": False,
+    }
     atomic_write_json(failure_path, evidence)
     return evidence
 
