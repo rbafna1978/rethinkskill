@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import socket
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,33 @@ def chat_completions_url(base_url: str) -> str:
     if value.endswith("/v1"):
         return f"{value}/chat/completions"
     return f"{value}/v1/chat/completions"
+
+
+# FOCUS fork: retry transient API failures so one hiccup does not end a long run.
+# Delays (seconds) before retry 1, 2, 3. Override with RETHINKSKILL_RETRY_DELAYS="0,0,0".
+_DEFAULT_RETRY_DELAYS = (10.0, 30.0, 90.0)
+_sleep = time.sleep  # replaced in tests
+
+
+def _retry_delays() -> tuple[float, ...]:
+    raw = os.environ.get("RETHINKSKILL_RETRY_DELAYS", "")
+    if not raw.strip():
+        return _DEFAULT_RETRY_DELAYS
+    try:
+        delays = tuple(float(part) for part in raw.split(","))
+    except ValueError as exc:
+        raise ConfigurationError("RETHINKSKILL_RETRY_DELAYS must be comma-separated seconds") from exc
+    if any(delay < 0 for delay in delays):
+        raise ConfigurationError("RETHINKSKILL_RETRY_DELAYS must not be negative")
+    return delays
+
+
+def _is_retryable(failure_class: str | None, status_code: int | None) -> bool:
+    if failure_class in {"transport_error", "target_timeout", "response_schema_error"}:
+        return True
+    if failure_class == "provider_http_error":
+        return status_code is not None and (status_code == 429 or status_code >= 500)
+    return False
 
 
 def _message_content(rendered: RenderedTask, workspace: Path) -> str | list[dict[str, object]]:
@@ -138,41 +166,50 @@ class OpenAICompatibleExecutor:
             },
             method="POST",
         )
-        status_code = None
-        raw = ""
-        response = ""
-        failure_class = None
-        failure = ""
-        try:
-            with urlopen(request, timeout=timeout_seconds) as handle:
-                status_code = int(handle.status)
-                raw = redact_text(handle.read().decode("utf-8", errors="replace"), redactions)
-            parsed = strict_json_loads(raw)
-            choices = parsed.get("choices") if isinstance(parsed, dict) else None
-            message = (
-                choices[0].get("message")
-                if isinstance(choices, list) and choices and isinstance(choices[0], dict)
-                else None
-            )
-            content = message.get("content") if isinstance(message, dict) else None
-            if not isinstance(content, str) or not content.strip():
-                raise ValueError("response has no choices[0].message.content")
-            response = content
-        except HTTPError as exc:
-            status_code = exc.code
-            raw = redact_text(exc.read().decode("utf-8", errors="replace"), redactions)
-            failure_class = "provider_http_error"
-            failure = f"HTTP {exc.code}: {raw[-3000:]}"
-        except (URLError, TimeoutError, OSError) as exc:
-            failure_class = (
-                "target_timeout"
-                if isinstance(exc, (TimeoutError, socket.timeout))
-                else "transport_error"
-            )
-            failure = f"OpenAI-compatible request failed: {safe_exception_type(exc)}"
-        except (json.JSONDecodeError, ValueError) as exc:
-            failure_class = "response_schema_error"
-            failure = f"OpenAI-compatible response schema is invalid: {safe_exception_type(exc)}"
+        delays = _retry_delays()
+        retry_log: list[dict[str, object]] = []
+        for attempt in range(len(delays) + 1):
+            status_code = None
+            raw = ""
+            response = ""
+            failure_class = None
+            failure = ""
+            try:
+                with urlopen(request, timeout=timeout_seconds) as handle:
+                    status_code = int(handle.status)
+                    raw = redact_text(handle.read().decode("utf-8", errors="replace"), redactions)
+                parsed = strict_json_loads(raw)
+                choices = parsed.get("choices") if isinstance(parsed, dict) else None
+                message = (
+                    choices[0].get("message")
+                    if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+                    else None
+                )
+                content = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(content, str) or not content.strip():
+                    raise ValueError("response has no choices[0].message.content")
+                response = content
+            except HTTPError as exc:
+                status_code = exc.code
+                raw = redact_text(exc.read().decode("utf-8", errors="replace"), redactions)
+                failure_class = "provider_http_error"
+                failure = f"HTTP {exc.code}: {raw[-3000:]}"
+            except (URLError, TimeoutError, OSError) as exc:
+                failure_class = (
+                    "target_timeout"
+                    if isinstance(exc, (TimeoutError, socket.timeout))
+                    else "transport_error"
+                )
+                failure = f"OpenAI-compatible request failed: {safe_exception_type(exc)}"
+            except (json.JSONDecodeError, ValueError) as exc:
+                failure_class = "response_schema_error"
+                failure = f"OpenAI-compatible response schema is invalid: {safe_exception_type(exc)}"
+            if failure_class is None or attempt >= len(delays):
+                break
+            if not _is_retryable(failure_class, status_code):
+                break
+            retry_log.append({"failure_class": failure_class, "http_status": status_code})
+            _sleep(delays[attempt])
         response = redact_text(response, redactions)
         failure = redact_text(failure, redactions)
         completed = failure_class is None and bool(response.strip())
@@ -185,6 +222,8 @@ class OpenAICompatibleExecutor:
                 "http_status": status_code,
                 "credential_env": self.api_key_env,
                 "request_body_bytes": len(request.data or b""),
+                "retries": len(retry_log),
+                "retry_failures": retry_log,
             },
             attempted_calls=1,
             completed_calls=1 if completed else 0,
