@@ -46,7 +46,9 @@ def _retry_delays() -> tuple[float, ...]:
     try:
         delays = tuple(float(part) for part in raw.split(","))
     except ValueError as exc:
-        raise ConfigurationError("RETHINKSKILL_RETRY_DELAYS must be comma-separated seconds") from exc
+        raise ConfigurationError(
+            "RETHINKSKILL_RETRY_DELAYS must be comma-separated seconds"
+        ) from exc
     if any(delay < 0 for delay in delays):
         raise ConfigurationError("RETHINKSKILL_RETRY_DELAYS must not be negative")
     return delays
@@ -203,7 +205,9 @@ class OpenAICompatibleExecutor:
                 failure = f"OpenAI-compatible request failed: {safe_exception_type(exc)}"
             except (json.JSONDecodeError, ValueError) as exc:
                 failure_class = "response_schema_error"
-                failure = f"OpenAI-compatible response schema is invalid: {safe_exception_type(exc)}"
+                failure = (
+                    f"OpenAI-compatible response schema is invalid: {safe_exception_type(exc)}"
+                )
             if failure_class is None or attempt >= len(delays):
                 break
             if not _is_retryable(failure_class, status_code):
