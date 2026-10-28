@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 
+from rethinkskill.utils.process import combined_secret_values, redact_text
 from rethinkskill.utils.serde import snapshot_regular_file
 
 _PATH_ASSIGNMENT = re.compile(
@@ -244,7 +245,30 @@ def validate_generated_code_isolation(code: str) -> None:
         elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
             violations.append(f"dunder:{node.attr}")
     if violations:
-        raise ValueError("RETHINKSKILL_GENERATED_CODE_ISOLATION_BLOCK")
+        # FOCUS fork: name the first violations so failures can be told apart.
+        raise ValueError(
+            "RETHINKSKILL_GENERATED_CODE_ISOLATION_BLOCK: "
+            + ", ".join(sorted(set(violations))[:10])
+        )
+
+
+# FOCUS fork: keep a short, redacted tail of the child's stderr (the traceback)
+# so failures can be clustered by their actual error. stdout is still not kept.
+_STDERR_TAIL_CHARS = 1500
+_EXCEPTION_CHARS = 300
+
+
+def _stderr_tail(stderr: str, runner_path: Path | None = None) -> str:
+    text = stderr
+    if runner_path is not None:
+        text = text.replace(str(runner_path), "<generated_code>")
+    text = redact_text(text, combined_secret_values(os.environ))
+    return text[-_STDERR_TAIL_CHARS:]
+
+
+def _exception_line(stderr_tail: str) -> str:
+    lines = [line.strip() for line in stderr_tail.splitlines() if line.strip()]
+    return lines[-1][:_EXCEPTION_CHARS] if lines else ""
 
 
 def _stream_evidence(value: str) -> dict[str, object]:
@@ -271,7 +295,8 @@ def run_generated_code(
     cleaned = _PATH_ASSIGNMENT.sub("", code)
     try:
         validate_generated_code_isolation(cleaned)
-    except ValueError:
+    except ValueError as exc:
+        reason = _stderr_tail(str(exc))
         return {
             "ok": False,
             "failure": "generated_code_rejected",
@@ -279,6 +304,8 @@ def run_generated_code(
             "timed_out": False,
             "stdout_evidence": _stream_evidence(""),
             "stderr_evidence": _stream_evidence(""),
+            "stderr_tail": "",
+            "exception": _exception_line(reason),
         }
     with tempfile.NamedTemporaryFile(
         "w",
@@ -365,6 +392,7 @@ def run_generated_code(
             stdout, stderr = process.communicate()
     finally:
         runner_path.unlink(missing_ok=True)
+    tail = _stderr_tail(stderr or "", runner_path)
     failure = ""
     if timed_out:
         failure = "generated_code_timeout"
@@ -379,6 +407,8 @@ def run_generated_code(
         "timed_out": timed_out,
         "stdout_evidence": _stream_evidence(stdout),
         "stderr_evidence": _stream_evidence(stderr),
+        "stderr_tail": tail,
+        "exception": _exception_line(tail),
     }
 
 
