@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from collections.abc import Mapping
@@ -46,8 +47,13 @@ class SpreadsheetRuntimeSafetyTests(unittest.TestCase):
         self.assertNotIn(secret, str(caught.exception))
 
     def test_child_streams_are_summarized_without_persisting_raw_text(self) -> None:
+        # FOCUS fork: stdout is still never kept; stderr keeps a short tail
+        # (the traceback) with environment secrets redacted.
         secret = "spreadsheet-child-secret"
-        with tempfile.TemporaryDirectory() as temporary:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.dict(os.environ, {"FOCUS_FAKE_API_KEY": secret}),
+        ):
             root = Path(temporary)
             input_path = root / "input.xlsx"
             input_path.write_bytes(b"fixture")
@@ -65,6 +71,52 @@ class SpreadsheetRuntimeSafetyTests(unittest.TestCase):
         self.assertTrue(result["stdout_evidence"]["present"])
         self.assertTrue(result["stderr_evidence"]["present"])
         self.assertNotIn("sha256", result["stdout_evidence"])
+        self.assertEqual(result["exception"], "RuntimeError: [REDACTED]")
+        self.assertIn("Traceback", result["stderr_tail"])
+        self.assertIn("<generated_code>", result["stderr_tail"])
+        self.assertNotIn(".rethinkskill-runner-", result["stderr_tail"])
+
+    def test_stderr_tail_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.xlsx"
+            input_path.write_bytes(b"fixture")
+            result = run_generated_code(
+                "import sys\nsys.stderr.write('x' * 10000)\nraise ValueError('boom')",
+                input_path=input_path,
+                output_path=root / "output.xlsx",
+            )
+        self.assertLessEqual(len(result["stderr_tail"]), 1500)
+        self.assertEqual(result["exception"], "ValueError: boom")
+        self.assertEqual(result["stderr_evidence"]["bytes"] > 10000, True)
+
+    def test_successful_run_has_empty_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.xlsx"
+            input_path.write_bytes(b"fixture")
+            result = run_generated_code(
+                "open(OUTPUT_PATH, 'wb').write(b'ok')",
+                input_path=input_path,
+                output_path=root / "output.xlsx",
+            )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stderr_tail"], "")
+        self.assertEqual(result["exception"], "")
+
+    def test_rejected_code_names_the_violation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.xlsx"
+            input_path.write_bytes(b"fixture")
+            result = run_generated_code(
+                "import subprocess\nsubprocess.run(['echo', 'x'])",
+                input_path=input_path,
+                output_path=root / "output.xlsx",
+            )
+        self.assertEqual(result["failure"], "generated_code_rejected")
+        self.assertIn("ISOLATION_BLOCK", result["exception"])
+        self.assertIn("import:subprocess", result["exception"])
 
 
 class _CodeExecutor:
@@ -199,6 +251,60 @@ class SpreadsheetNativeTests(unittest.TestCase):
             receipt["status"],
             "RETHINKSKILL_NATIVE_EXECUTION_VALIDATED",
         )
+
+    def test_crashing_code_reaches_ledger_as_failure_with_exception(self) -> None:
+        # FOCUS fork: the traceback summary must reach results.jsonl, and a
+        # crash must stay an ordinary task failure (not infrastructure).
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = self._repository(temporary)
+            dataset = repository.root / "dataset/test"
+            dataset.mkdir(parents=True)
+            dataset.joinpath("items.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "sheet-1",
+                            "instruction": "Put the sum of A1:A2 in B1.",
+                            "instruction_type": "Cell-Level Manipulation",
+                            "answer_position": "Sheet1!B1",
+                            "spreadsheet_path": "spreadsheet/sheet-1",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            corpus = repository.root / "corpus"
+            task_directory = corpus / "spreadsheet/sheet-1"
+            task_directory.mkdir(parents=True)
+            self._workbook(task_directory / "1_sheet-1_init.xlsx", answer=None)
+            self._workbook(task_directory / "1_sheet-1_golden.xlsx", answer=3)
+            skill = repository.root / "skill.md"
+            skill.write_text("Use openpyxl and preserve the workbook.", encoding="utf-8")
+            plan = plan_native_run(
+                repository=repository,
+                catalog=self._catalog(),
+                benchmark="spreadsheetbench",
+                dataset=dataset.parent,
+                skill=skill,
+                output_root=repository.root / "runs/spreadsheet-crash",
+                options=NativeRunOptions(split="test", limit=1, asset_root=corpus),
+            )
+            receipt = execute_native_plan(
+                plan,
+                executor=_CodeExecutor("raise ValueError('boom')\n"),
+                authorized=True,
+            )
+            row = json.loads(
+                (repository.root / "runs/spreadsheet-crash/results.jsonl").read_text(
+                    encoding="utf-8"
+                )
+            )
+        case = row["execution"]["artifact_runner"]["cases"][0]
+        self.assertEqual(case["exception"], "ValueError: boom")
+        self.assertIn("Traceback", case["stderr_tail"])
+        self.assertEqual(row["hard"], 0)
+        self.assertFalse(row.get("failure_class"))
+        self.assertEqual(receipt["status"], "RETHINKSKILL_NATIVE_EXECUTION_VALIDATED")
 
     def test_official_numeric_quantization_is_not_strict_float_equality(
         self,
