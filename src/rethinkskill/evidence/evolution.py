@@ -351,6 +351,11 @@ def gate_state(value: object, *, label: str) -> GateState:
     return state
 
 
+# FOCUS fork: replay_evolution_rounds has a local variable named gate_state that
+# shadows this function, so it calls it through this alias.
+_parse_gate_state = gate_state
+
+
 def gate_public(state: GateState) -> dict[str, object]:
     return {
         "current_hard": state.current_hard,
@@ -829,7 +834,7 @@ def replay_evolution_rounds(
             expected_state = decision.state
         if row.get("action") != expected_action:
             invalid(f"evolution round {round_no} gate action does not replay")
-        observed_state = gate_state(
+        observed_state = _parse_gate_state(
             row.get("gate_state"), label=f"evolution round {round_no} gate state"
         )
         if gate_public(observed_state) != gate_public(expected_state):
