@@ -125,7 +125,9 @@ class FocusSelectorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        # resolve(): macOS temp dirs sit behind a symlink (/var -> /private/var),
+        # and rethinkskill rejects symlinked paths by design.
+        self.root = Path(self.tmp.name).resolve()
         (self.root / "pyproject.toml").write_text("", encoding="utf-8")
         corpus = self.root / "corpus"
         records = []
