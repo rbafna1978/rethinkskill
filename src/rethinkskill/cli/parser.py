@@ -135,7 +135,14 @@ def add_native_evolution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--asset-root", type=Path)
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument("--arm", choices=("normal", "fail_only", "success_only"), default="normal")
+    parser.add_argument(
+        "--arm",
+        choices=("normal", "fail_only", "success_only", "cluster", "contrastive"),
+        default="normal",
+    )
+    # FOCUS fork: external selector for the cluster / contrastive arms.
+    parser.add_argument("--selector-command")
+    parser.add_argument("--selector-timeout-seconds", type=int, default=600)
     parser.add_argument("--hard-dead-band", type=float, default=0.01)
     parser.add_argument("--soft-rescue-delta", type=float)
     parser.add_argument("--max-skill-chars", type=int, default=80000)

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
@@ -42,6 +44,7 @@ from rethinkskill.utils.serde import (
     freeze_json_mapping_sequence,
     sha256_bytes,
     snapshot_regular_file,
+    strict_json_loads,
     thaw_json_mapping,
 )
 
@@ -56,6 +59,9 @@ class EvolutionOptions:
     train_split: str = "train"
     validation_split: str = "val"
     max_skill_chars: int = 80000
+    # FOCUS fork: external selector (argv) for the cluster / contrastive arms.
+    selector_command: tuple[str, ...] = ()
+    selector_timeout_seconds: int = 600
 
     def validate(self) -> None:
         if type(self.rounds) is not int or self.rounds < 1:
@@ -86,6 +92,12 @@ class EvolutionOptions:
             raise ConfigurationError("evolution splits must be safe role identifiers")
         if type(self.max_skill_chars) is not int or self.max_skill_chars < 1:
             raise ConfigurationError("max_skill_chars must be positive")
+        if type(self.selector_command) is not tuple or not all(
+            type(part) is str and part for part in self.selector_command
+        ):
+            raise ConfigurationError("selector_command must be a tuple of non-empty strings")
+        if type(self.selector_timeout_seconds) is not int or self.selector_timeout_seconds < 1:
+            raise ConfigurationError("selector_timeout_seconds must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +163,8 @@ def plan_evolution(
                 "train_split": options.train_split,
                 "validation_split": options.validation_split,
                 "max_skill_chars": options.max_skill_chars,
+                "selector_command": list(options.selector_command),
+                "selector_timeout_seconds": options.selector_timeout_seconds,
             },
             "model_calls": 0,
             "target_calls": 0,
@@ -238,6 +252,8 @@ def validate_evolution_plan_freeze(plan: EvolutionPlan) -> str:
             "train_split": plan.options.train_split,
             "validation_split": plan.options.validation_split,
             "max_skill_chars": plan.options.max_skill_chars,
+            "selector_command": list(plan.options.selector_command),
+            "selector_timeout_seconds": plan.options.selector_timeout_seconds,
         },
     }
     validate_frozen_plan_fields(preflight, expected, label="evolution")
@@ -859,6 +875,142 @@ def _optimizer_boundary(
 FailureStage = Callable[[str], AbstractContextManager[None]]
 
 
+SELECTION_EVIDENCE_FILENAME = "SELECTION.json"
+SELECTOR_CONTRACT_VERSION = 1
+_SELECTOR_SECRET_MARKERS = ("API_KEY", "TOKEN", "SECRET", "AUTH", "PASSWORD")
+
+
+class SelectorError(Exception):
+    """The external selector failed or broke the selector contract."""
+
+
+def selection_evidence_path(run_root: Path, round_no: int) -> Path:
+    return run_root / "selection" / f"round_{round_no:04d}" / SELECTION_EVIDENCE_FILENAME
+
+
+def _selector_environment() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not any(marker in key.upper() for marker in _SELECTOR_SECRET_MARKERS)
+    }
+
+
+def _selector_history(run_root: Path, round_no: int) -> list[dict[str, object]]:
+    history: list[dict[str, object]] = []
+    for previous in range(1, round_no):
+        path = selection_evidence_path(run_root, previous)
+        if not path.is_file():
+            continue
+        record = json.loads(path.read_text(encoding="utf-8"))
+        output = record.get("output") or {}
+        history.append(
+            {
+                "round": previous,
+                "cluster_id": output.get("cluster_id"),
+                "keep_case_ids": list(record.get("kept", [])),
+            }
+        )
+    return history
+
+
+def run_feedback_selector(
+    plan: EvolutionPlan,
+    *,
+    round_no: int,
+    training: EvaluationOutcome,
+    feedback: tuple[Mapping[str, object], ...],
+) -> tuple[Mapping[str, object], ...]:
+    """FOCUS fork: let the external selector choose which feedback the optimizer sees.
+
+    Writes selection/round_NNNN/SELECTION.json with the exact input and output.
+    Raises SelectorError on any contract violation; never falls back silently.
+    """
+    from rethinkskill.utils.process import combined_secret_values, redact_text
+
+    evidence_path = selection_evidence_path(plan.output_root, round_no)
+    reference = training.reference.split("#", 1)[0]
+    results_path = Path(reference)
+    if not results_path.is_absolute():
+        results_path = plan.output_root / results_path
+    items = [thaw_json_mapping(item) for item in feedback]
+    selector_input = {
+        "contract_version": SELECTOR_CONTRACT_VERSION,
+        "mode": plan.options.arm,
+        "round": round_no,
+        "rounds_total": plan.options.rounds,
+        "allowed_categories": list(plan.options.feedback_categories),
+        "results_path": str(results_path),
+        "feedback": items,
+        "history": _selector_history(plan.output_root, round_no),
+    }
+    record: dict[str, object] = {
+        "schema_version": 1,
+        "round": round_no,
+        "command": list(plan.options.selector_command),
+        "input": selector_input,
+    }
+    if not items:
+        record.update({"skipped": "no feedback in allowed categories", "output": None, "kept": []})
+        atomic_write_json(evidence_path, record)
+        return ()
+
+    def fail(message: str, stderr: str = "") -> SelectorError:
+        redactions = combined_secret_values(os.environ)
+        tail = redact_text(stderr, redactions)[-2000:]
+        record.update({"error": redact_text(message, redactions), "stderr_tail": tail})
+        atomic_write_json(evidence_path, record)
+        return SelectorError(f"round {round_no} selector: {record['error']}")
+
+    try:
+        completed = subprocess.run(
+            list(plan.options.selector_command),
+            input=json.dumps(selector_input, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            timeout=plan.options.selector_timeout_seconds,
+            env=_selector_environment(),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise fail(
+            f"timed out after {plan.options.selector_timeout_seconds}s",
+            exc.stderr if isinstance(exc.stderr, str) else "",
+        ) from exc
+    except OSError as exc:
+        raise fail(f"could not start: {type(exc).__name__}") from exc
+    if completed.returncode != 0:
+        raise fail(f"exited with code {completed.returncode}", completed.stderr)
+    try:
+        output = strict_json_loads(completed.stdout)
+    except (json.JSONDecodeError, ValueError):
+        raise fail("stdout is not one JSON object", completed.stderr) from None
+    if type(output) is not dict:
+        raise fail("stdout is not one JSON object", completed.stderr)
+    keep = output.get("keep_case_ids")
+    if type(keep) is not list or not keep or not all(type(i) is str and i for i in keep):
+        raise fail("keep_case_ids must be a non-empty list of task ids", completed.stderr)
+    if len(keep) != len(set(keep)):
+        raise fail("keep_case_ids contains duplicates", completed.stderr)
+    known = [str(item.get("case_id")) for item in items]
+    unknown = sorted(set(keep) - set(known))
+    if unknown:
+        raise fail(f"keep_case_ids not in this round's feedback: {unknown[:10]}", completed.stderr)
+    wanted = set(keep)
+    kept = [case_id for case_id in known if case_id in wanted]
+    record.update(
+        {
+            "output": output,
+            "kept": kept,
+            "stderr_tail": redact_text(completed.stderr, combined_secret_values(os.environ))[
+                -2000:
+            ],
+        }
+    )
+    atomic_write_json(evidence_path, record)
+    return tuple(item for item in feedback if str(item.get("case_id")) in wanted)
+
+
 def execute_evolution_round(
     plan: EvolutionPlan,
     *,
@@ -887,6 +1039,19 @@ def execute_evolution_round(
             )
             return
         filtered = filter_feedback(training.feedback, plan.options.feedback_categories)
+        if plan.options.selector_command:
+            try:
+                filtered = run_feedback_selector(
+                    plan, round_no=round_no, training=training, feedback=filtered
+                )
+            except SelectorError as exc:
+                state.fail(
+                    failure_class="selector_error",
+                    failure=str(exc),
+                    stage="training",
+                    round_no=round_no,
+                )
+                return
         training_for_optimizer = with_feedback(training, filtered)
     with failure_stage("optimization"):
         proposal, proposal_accounting_known = _optimizer_boundary(

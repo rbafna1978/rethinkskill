@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -238,7 +239,27 @@ _ARM_FEEDBACK = {
     "normal": ("failure", "success"),
     "fail_only": ("failure",),
     "success_only": ("success",),
+    # FOCUS fork: same feedback as fail_only / normal, narrowed by the selector.
+    "cluster": ("failure",),
+    "contrastive": ("failure", "success"),
 }
+_SELECTOR_ARMS = frozenset({"cluster", "contrastive"})
+
+
+def _selector_argv(args: argparse.Namespace) -> tuple[str, ...]:
+    command = getattr(args, "selector_command", None)
+    if args.arm in _SELECTOR_ARMS:
+        if not command or not command.strip():
+            raise ConfigurationError(f"--arm {args.arm} requires --selector-command")
+        argv = tuple(shlex.split(command))
+        if not argv:
+            raise ConfigurationError("--selector-command is empty")
+        return argv
+    if command:
+        raise ConfigurationError(
+            "--selector-command is only valid with --arm cluster or contrastive"
+        )
+    return ()
 
 
 def native_evolution_command(args: argparse.Namespace) -> CommandResult:
@@ -268,6 +289,8 @@ def native_evolution_command(args: argparse.Namespace) -> CommandResult:
             train_split="train",
             validation_split="validation",
             max_skill_chars=args.max_skill_chars,
+            selector_command=_selector_argv(args),
+            selector_timeout_seconds=args.selector_timeout_seconds,
         ),
     )
     frozen = freeze_native_evolution_inputs(

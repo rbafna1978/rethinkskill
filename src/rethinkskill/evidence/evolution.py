@@ -210,6 +210,7 @@ def replay_native_evaluation(
     round_no: int,
     expected_skill_sha256: str,
     feedback_categories: Sequence[str] | None = None,
+    feedback_selection: Mapping[str, object] | None = None,
 ) -> None:
     """Replay one nested native run and bind it to its outer outcome."""
     if _ROLE.fullmatch(role) is None:
@@ -261,6 +262,21 @@ def replay_native_evaluation(
         allowed = set(feedback_categories)
         replayed["feedback"] = [
             item for item in replayed["feedback"] if str(item.get("category", "")) in allowed
+        ]
+    if feedback_selection is not None:
+        # FOCUS fork: the selector must have seen exactly the category-filtered
+        # feedback, and the optimizer must have seen exactly the kept ids.
+        selector_input = mapping(feedback_selection.get("input"), label="selection input")
+        if selector_input.get("feedback") != replayed["feedback"]:
+            invalid(f"round {round_no} selector input does not replay from its child run")
+        kept = feedback_selection.get("kept")
+        if type(kept) is not list or not all(type(item) is str for item in kept):
+            invalid(f"round {round_no} selection kept ids are invalid")
+        known = [str(item.get("case_id")) for item in replayed["feedback"]]
+        if [case_id for case_id in known if case_id in set(kept)] != kept:
+            invalid(f"round {round_no} selection kept ids are not in replay order")
+        replayed["feedback"] = [
+            item for item in replayed["feedback"] if str(item.get("case_id")) in set(kept)
         ]
     if replayed != outcome:
         invalid("native evolution outcome does not replay from its child run")
@@ -714,6 +730,7 @@ def replay_evolution_rounds(
     target_attempted: int,
     target_completed: int,
     nested_native_runs: int,
+    selector_enabled: bool = False,
 ) -> EvolutionRoundReplay:
     """Replay every complete ledger round without terminal receipt policy."""
     gate_state = initial_gate_state
@@ -758,6 +775,14 @@ def replay_evolution_rounds(
                 round_no=round_no,
                 expected_skill_sha256=parent_digest,
                 feedback_categories=categories,
+                feedback_selection=(
+                    json_object(
+                        run_root / "selection" / f"round_{round_no:04d}" / "SELECTION.json",
+                        label=f"evolution round {round_no} selection",
+                    )
+                    if selector_enabled
+                    else None
+                ),
             )
             nested_native_runs += 1
         proposal = replay_evolution_proposal(
@@ -935,6 +960,9 @@ def validate_evolution_evidence(run_root: Path) -> dict[str, object]:
     train_role = options.get("train_split")
     validation_role = options.get("validation_split")
     feedback_categories = options.get("feedback_categories")
+    selector_command = options.get("selector_command", [])
+    if type(selector_command) is not list:
+        invalid("evolution selector_command is invalid")
     if (
         type(train_role) is not str
         or type(validation_role) is not str
@@ -1040,6 +1068,7 @@ def validate_evolution_evidence(run_root: Path) -> dict[str, object]:
         target_attempted=target_attempted,
         target_completed=target_completed,
         nested_native_runs=nested_native_runs,
+        selector_enabled=bool(selector_command),
     )
     gate_state = round_replay.gate_state
     parent_digest = round_replay.parent_digest
