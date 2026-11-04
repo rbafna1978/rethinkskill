@@ -209,6 +209,10 @@ def verify_spreadsheet(prediction: Path, reference: Path, answer_position: str) 
                         return Verification(
                             Verdict.FAIL, f"value_mismatch:{sheet}!{row}:{column}", checked=checked
                         )
+    except Exception as exc:  # noqa: BLE001
+        # FOCUS fork: a workbook the comparison cannot read is a failed answer,
+        # not an infrastructure error that invalidates the whole evaluation.
+        return Verification(Verdict.FAIL, f"compare_error:{type(exc).__name__}", checked=checked)
     finally:
         predicted.close()
         expected.close()
