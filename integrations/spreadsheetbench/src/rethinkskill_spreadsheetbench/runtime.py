@@ -418,6 +418,22 @@ def preview_workbook(path: Path) -> str:
     return preview_workbook_bytes(snapshot_regular_file(path).payload)
 
 
+def _sheet_size(sheet: object) -> tuple[int, int]:
+    """FOCUS fork: (rows, columns), also for read-only sheets without a stored size.
+
+    openpyxl reports max_row/max_column as None when the file omits its
+    <dimension> element; the preview then crashed with a TypeError.
+    """
+    rows, columns = sheet.max_row, sheet.max_column
+    if rows is None or columns is None:
+        try:
+            sheet.calculate_dimension(force=True)
+            rows, columns = sheet.max_row, sheet.max_column
+        except Exception:  # noqa: BLE001  (openpyxl fails on fully empty unsized sheets)
+            rows, columns = 0, 0
+    return int(rows or 0), int(columns or 0)
+
+
 def preview_workbook_bytes(payload: bytes) -> str:
     """Return a preview from the exact bytes bound into task provenance."""
 
@@ -440,10 +456,11 @@ def preview_workbook_bytes(payload: bytes) -> str:
         for sheet_name in workbook.sheetnames[:8]:
             sheet = workbook[sheet_name]
             lines.append(f"## Sheet: {sheet_name}")
+            max_row, max_column = _sheet_size(sheet)
             for row in sheet.iter_rows(
                 min_row=1,
-                max_row=min(sheet.max_row, 30),
-                max_col=min(sheet.max_column, 16),
+                max_row=min(max_row, 30),
+                max_col=min(max_column, 16),
                 values_only=True,
             ):
                 values = ["" if value is None else str(value) for value in row]
@@ -451,8 +468,8 @@ def preview_workbook_bytes(payload: bytes) -> str:
                     values.pop()
                 if values:
                     lines.append("\t".join(values))
-            if sheet.max_row > 30 or sheet.max_column > 16:
-                lines.append(f"[preview truncated; dimensions={sheet.max_row}x{sheet.max_column}]")
+            if max_row > 30 or max_column > 16:
+                lines.append(f"[preview truncated; dimensions={max_row}x{max_column}]")
     finally:
         workbook.close()
     return "\n".join(lines)[:30_000] or "(workbook has no visible cells)"
