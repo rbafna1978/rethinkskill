@@ -172,6 +172,20 @@ def _values_match(observed: object, gold: object) -> bool:
     return observed == gold
 
 
+def _range_values(
+    worksheet: Any, min_row: int, max_row: int, min_col: int, max_col: int
+) -> dict[tuple[int, int], object]:
+    """Values of a cell range keyed by (row, column), read in a single pass."""
+    values: dict[tuple[int, int], object] = {}
+    rows = worksheet.iter_rows(
+        min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col, values_only=True
+    )
+    for row_offset, row_values in enumerate(rows):
+        for column_offset, value in enumerate(row_values):
+            values[(min_row + row_offset, min_col + column_offset)] = value
+    return values
+
+
 def verify_spreadsheet(prediction: Path, reference: Path, answer_position: str) -> Verification:
     try:
         import openpyxl
@@ -200,10 +214,15 @@ def verify_spreadsheet(prediction: Path, reference: Path, answer_position: str) 
             if sheet not in predicted.sheetnames or sheet not in expected.sheetnames:
                 return Verification(Verdict.FAIL, f"sheet_missing:{sheet}", checked=checked)
             min_col, min_row, max_col, max_row = range_boundaries(cell_range)
+            # FOCUS fork: read each range in one pass. In read-only mode every
+            # .cell() call re-parses the sheet XML, which made large answer
+            # ranges take minutes; the values compared are identical.
+            gold_grid = _range_values(expected[sheet], min_row, max_row, min_col, max_col)
+            observed_grid = _range_values(predicted[sheet], min_row, max_row, min_col, max_col)
             for row in range(min_row, max_row + 1):
                 for column in range(min_col, max_col + 1):
-                    gold_value = expected[sheet].cell(row, column).value
-                    observed_value = predicted[sheet].cell(row, column).value
+                    gold_value = gold_grid.get((row, column))
+                    observed_value = observed_grid.get((row, column))
                     checked += 1
                     if not _values_match(observed_value, gold_value):
                         return Verification(
