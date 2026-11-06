@@ -92,6 +92,39 @@ def _exact_nonnegative(value: object, *, label: str) -> int:
     return value
 
 
+GENERATED_CODE_ERROR_LIMIT = 300
+
+
+def generated_code_error(row: Mapping[str, object]) -> str:
+    """FOCUS fork: why the task's generated code failed, for the optimizer to read.
+
+    Benchmarks that run generated code (SpreadsheetBench) record each case under
+    execution.artifact_runner. The verifier reason alone (e.g. workbook_missing)
+    hides that the code crashed, such as on a missing import. Returns distinct
+    "<failure>: <last exception line>" entries joined by " | ", already redacted
+    at capture time, capped at GENERATED_CODE_ERROR_LIMIT characters. Empty when
+    nothing was recorded.
+    """
+    execution = row.get("execution")
+    runner = execution.get("artifact_runner") if isinstance(execution, Mapping) else None
+    if not isinstance(runner, Mapping):
+        return ""
+    extraction_error = runner.get("extraction_error")
+    if type(extraction_error) is str and extraction_error:
+        return f"no runnable code extracted: {extraction_error}"[:GENERATED_CODE_ERROR_LIMIT]
+    cases = runner.get("cases")
+    entries: list[str] = []
+    for case in cases if isinstance(cases, (list, tuple)) else ():
+        if not isinstance(case, Mapping):
+            continue
+        failure = case.get("failure") if type(case.get("failure")) is str else ""
+        exception = case.get("exception") if type(case.get("exception")) is str else ""
+        text = ": ".join(part for part in (failure, exception) if part)
+        if text and text not in entries:
+            entries.append(text)
+    return " | ".join(entries)[:GENERATED_CODE_ERROR_LIMIT]
+
+
 def evaluation_outcome(
     *,
     receipt: Mapping[str, object],
@@ -231,6 +264,7 @@ def evaluation_outcome(
                 "metrics": row.get("metrics", {}),
                 "gold": row.get("gold", {}),
                 "fail_reason": row.get("fail_reason", ""),
+                "error": "" if hard_score == 1.0 else generated_code_error(row),
             }
             for row, hard_score, _ in scored_rows
         )
